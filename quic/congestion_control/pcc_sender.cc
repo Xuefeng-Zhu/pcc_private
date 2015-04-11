@@ -5,9 +5,11 @@
 namespace net {
 
 PCCSender::PCCSender()
-	: current_monitor(-1),
+	: if_monitor(false),
+    current_monitor(-1),
     previous_monitor(-1),
-    monitor_left(0){
+    monitor_left(0),
+    monitor_packet_left(0){
 		printf("pcc\n");
 }
 
@@ -33,26 +35,18 @@ bool PCCSender::OnPacketSent(
     QuicPacketSequenceNumber sequence_number,
     QuicByteCount bytes,
     HasRetransmittableData has_retransmittable_data) {
-  QuicTime zero = QuicTime::Zero();
-  QuicTime::Delta time = sent_time.Subtract(zero);
-  printf("\n");
-  printf("sent\n");
-  printf("sent time: %ld\n", time.ToMicroseconds());
-  printf("bytes in flight: %lu\n", bytes_in_flight);
-  printf("sequence number: %lu\n", sequence_number);
-  printf("bytes: %lu\n", bytes);
-  printf("send gap: %lu\n", sent_time.Subtract(last_sent_time).ToMicroseconds());
-  last_sent_time = sent_time;
-  QuicTime::Delta delay = QuicTime::Delta::FromMilliseconds(1000);
-  if(was_last_send_delayed_){
-  	was_last_send_delayed_ = false;
-  	ideal_next_packet_send_time_ = ideal_next_packet_send_time_.Add(delay);
-  }
-  else{
-    ideal_next_packet_send_time_ = QuicTime::Max(
-        ideal_next_packet_send_time_.Add(delay), sent_time.Add(delay));
-  }
+
+    if (monitor_packet_left == 0){
+      start_monitor();
+    }
+
   return true;
+}
+
+void PCCSender::start_monitor(){
+  previous_monitor = current_monitor;
+  current_monitor = (current_monitor + 1) % 100;
+  
 }
 
 void PCCSender::OnCongestionEvent(

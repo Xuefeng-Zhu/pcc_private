@@ -16,10 +16,15 @@
 
 namespace net {
 
+enum State {
+  SENDING,
+  WAITING,
+  FINISHED
+};
+
 struct pcc_monitor {
-  int packet_left;
   // for state, 1=sending, 2= waiting, 3=finished
-  int state;
+  State state;
 
   // time statics  
   double start_time;
@@ -41,6 +46,8 @@ struct pcc_monitor {
   int32_t latency_time_end;
   int32_t time_interval;
 };
+
+const int MONITOR_NUM = 100;
 
 class RttStats;
 
@@ -86,13 +93,15 @@ class NET_EXPORT_PRIVATE PCCSender : public SendAlgorithmInterface {
  	const QuicTime::Delta alarm_granularity_ = QuicTime::Delta::FromMilliseconds(1);
 
   // PCC monitor variable
+  bool if_monitor;
   int current_monitor;
   int previous_monitor;
   int monitor_left;
+  int monitor_packet_left;
 
-  pcc_monitor monitor[100];
+  pcc_monitor monitors[MONITOR_NUM];
 
-
+  void start_monitor();
 
   DISALLOW_COPY_AND_ASSIGN(PCCSender);
 };
