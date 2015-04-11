@@ -40,7 +40,7 @@ SendAlgorithmInterface* SendAlgorithmInterface::Create(
       LOG(DFATAL) << "BbrTcpSender is not supported.";
       return nullptr;
     case kPcc:
-    	return new PCCSender();
+    	return new PCCSender(rtt_stats);
   }
   return nullptr;
 }

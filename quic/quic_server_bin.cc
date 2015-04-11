@@ -7,6 +7,7 @@
 
 #include <iostream>
 #include <stdio.h>
+#include <signal.h>
 
 #include "base/at_exit.h"
 #include "base/basictypes.h"
@@ -23,6 +24,14 @@
 
 // The port the quic server will listen on.
 int32 FLAGS_port = 6121;
+
+void sigHandle(int signal)
+{
+  printf("exit\n");
+  exit(0);
+
+}
+
 
 int main(int argc, char *argv[]) {
   base::CommandLine::Init(argc, argv);
@@ -56,6 +65,7 @@ int main(int argc, char *argv[]) {
       FLAGS_port = port;
     }
   }
+  signal(SIGINT, sigHandle);
 
   base::AtExitManager exit_manager;
   base::MessageLoopForIO message_loop;
@@ -64,6 +74,10 @@ int main(int argc, char *argv[]) {
   CHECK(net::ParseIPLiteralToNumber("::", &ip));
 
   net::QuicConfig config;
+  const uint32 kWindowSize = 100 * 1024 * 1024;  // 10 MB
+  config.SetInitialStreamFlowControlWindowToSend(kWindowSize);
+  config.SetInitialSessionFlowControlWindowToSend(kWindowSize);
+
   net::QuicServer server(config, net::QuicSupportedVersions());
   //printf("Address: %s\n", net::IPAddressToString(ip).c_str());
   //printf("%s\n", net::GetHostName().c_str());
