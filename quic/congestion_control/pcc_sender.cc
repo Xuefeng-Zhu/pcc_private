@@ -4,12 +4,13 @@
 
 namespace net {
 
-PCCSender::PCCSender()
-	: if_monitor(false),
-    current_monitor(-1),
-    previous_monitor(-1),
-    monitor_left(0),
-    monitor_packet_left(0){
+PCCSender::PCCSender(const RttStats* rtt_stats)
+	: rtt_stats_(rtt_stats),
+    // if_monitor_(false),
+    current_monitor_(-1),
+    previous_monitor_(-1),
+    monitor_left_(0),
+    current_monitor_end_time_(NULL){
 		printf("pcc\n");
 }
 
@@ -36,17 +37,43 @@ bool PCCSender::OnPacketSent(
     QuicByteCount bytes,
     HasRetransmittableData has_retransmittable_data) {
 
-    if (monitor_packet_left == 0){
+    // TODO : case for retransmission
+    if (current_monitor_end_time_ == NULL){
       start_monitor();
+    } else {
+      QuicTime::Delta diff = sent_time.Subtract(current_monitor_end_time_);
+      if (diff.ToMicroseconds() > 0){
+        mointors_[current_monitor_].end_transmission_time = sent_time;
+      }
     }
 
   return true;
 }
 
-void PCCSender::start_monitor(){
-  previous_monitor = current_monitor;
-  current_monitor = (current_monitor + 1) % 100;
-  
+void PCCSender::start_monitor(QuicTime sent_time){
+  previous_monitor_ = current_monitor_;
+  current_monitor_ = (current_monitor_ + 1) % MONITOR_NUM;
+  // TODO : on MonitorStart  
+
+  // calculate monitor interval and monitor end time
+  double rand_factor = double(rand() % 3) / 10;
+  int64 srtt = rtt_stats_.smoothed_rtt().ToMicroseconds();
+  if (srtt == 0){
+    srtt = rtt_stats_.initial_rtt_us();
+  }
+  QuicTime::Delta monitor_interval = 
+      QuicTime::Delta::FromMicroseconds(srtt * (1.5 + rand_factor));
+  current_monitor_end_time_ = sent_time.Add(monitor_interval);
+
+  mointors_[current_monitor_].state = SENDING;
+  mointors_[current_monitor_].ack = 0;
+  mointors_[current_monitor_].lost = 0;
+  mointors_[current_monitor_].total = 0;
+  mointors_[current_monitor_].start_time = sent_time;
+  mointors_[current_monitor_].end_time = NULL;
+  mointors_[current_monitor_].end_transmission_time = NULL;
+
+  // if_monitor_ = true;
 }
 
 void PCCSender::OnCongestionEvent(

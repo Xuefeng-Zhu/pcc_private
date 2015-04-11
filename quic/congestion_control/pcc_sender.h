@@ -27,24 +27,23 @@ struct pcc_monitor {
   State state;
 
   // time statics  
-  double start_time;
-  double end_time;
-  double end_transmission_time;
+  QuicTime start_time;
+  QuicTime end_time;
+  QuicTime end_transmission_time;
 
   // packet statics
   int total;
   int ack;
   int lost;
-  int retransmission;
-  int new_transmission;
+  // int retransmission;
+  // int new_transmission;
 
   // latency statics
-  int32_t latency;
-  int32_t latency_seq_start;
-  int32_t latency_seq_end;
-  int32_t latency_time_start;
-  int32_t latency_time_end;
-  int32_t time_interval;
+  // int32_t latency;
+  // int32_t latency_seq_start;
+  // int32_t latency_seq_end;
+  // int32_t latency_time_start;
+  // int32_t latency_time_end;
 };
 
 const int MONITOR_NUM = 100;
@@ -53,7 +52,7 @@ class RttStats;
 
 class NET_EXPORT_PRIVATE PCCSender : public SendAlgorithmInterface {
  public:
-  PCCSender();
+  PCCSender(const RttStats* rtt_stats);
   ~PCCSender() override;
 
   // SendAlgorithmInterface methods.
@@ -93,15 +92,17 @@ class NET_EXPORT_PRIVATE PCCSender : public SendAlgorithmInterface {
  	const QuicTime::Delta alarm_granularity_ = QuicTime::Delta::FromMilliseconds(1);
 
   // PCC monitor variable
-  bool if_monitor;
-  int current_monitor;
-  int previous_monitor;
-  int monitor_left;
-  int monitor_packet_left;
+  // bool if_monitor_;
+  int current_monitor_;
+  int previous_monitor_;
+  int monitor_left_;
+  QuicTime current_monitor_end_time_;
 
-  pcc_monitor monitors[MONITOR_NUM];
+  pcc_monitor monitors_[MONITOR_NUM];
+  const RttStats* rtt_stats_;
 
-  void start_monitor();
+  // private PCC functions
+  void start_monitor(QuicTime sent_time);
 
   DISALLOW_COPY_AND_ASSIGN(PCCSender);
 };
