@@ -26,8 +26,12 @@ enum State {
   FINISHED
 };
 
+struct PacketInfo {
+  QuicTime sent_time,
+  QuicByteCount bytes
+};
+
 struct PCCMonitor {
-  // for state, 1=sending, 2= waiting, 3=finished
   State state;
 
   // time statics  
@@ -36,9 +40,9 @@ struct PCCMonitor {
   QuicTime end_transmission_time;
 
   // packet statics
-  int total;
-  int ack;
-  int lost;
+  std::map<QuicPacketSequenceNumber , PacketInfo> total_packet_map;
+  std::map<QuicPacketSequenceNumber , PacketInfo> ack_packet_map;
+  std::map<QuicPacketSequenceNumber , PacketInfo> lost_packet_map;
 };
 
 const int NUM_MONITOR = 100;

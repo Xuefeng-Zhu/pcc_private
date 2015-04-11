@@ -49,7 +49,8 @@ bool PCCSender::OnPacketSent(
       }
     }
 
-    mointors_[current_monitor_].total++;
+    PacketInfo packet_info = {sent_time, bytes};
+    mointors_[current_monitor_].total_packet_map = packet_info;
     seq_monitor_map_[sequence_number] = current_monitor_;
 
   return true;
@@ -88,12 +89,18 @@ void PCCSender::OnCongestionEvent(
   for (CongestionVector::const_iterator it = lost_packets.begin();
        it != lost_packets.end(); ++it) {
     MonitorNumber monitor_num = seq_monitor_map_[it->first];
-    mointors_[monitor_num].ack++;
+    PacketInfo packet_info = {it->second->sent_time, it->second->bytes_sent};
+    mointors_[monitor_num].ack_packet_map[it->first] = packet_info;
+
     end_monitor(it->first);
     seq_monitor_map_.erase(it->first);
   }
   for (CongestionVector::const_iterator it = acked_packets.begin();
        it != acked_packets.end(); ++it) {
+    MonitorNumber monitor_num = seq_monitor_map_[it->first];
+    PacketInfo packet_info = {it->second->sent_time, it->second->bytes_sent};
+    mointors_[monitor_num].lost_packet_map[it->first] = packet_info;
+
     end_monitor(it->first);
     seq_monitor_map_.erase(it->first);
   }
