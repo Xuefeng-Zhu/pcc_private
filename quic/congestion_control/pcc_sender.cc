@@ -6,10 +6,8 @@ namespace net {
 
 PCCSender::PCCSender(const RttStats* rtt_stats)
 	: rtt_stats_(rtt_stats),
-    // if_monitor_(false),
     current_monitor_(-1),
     previous_monitor_(-1),
-    // monitor_left_(0),
     current_monitor_end_time_(NULL){
 		printf("pcc\n");
 }
@@ -46,7 +44,6 @@ bool PCCSender::OnPacketSent(
         mointors_[current_monitor_].end_transmission_time = sent_time;
         mointors_[current_monitor_].state = WAITING;
         end_seq_monitor_map_[sequence_number] = current_monitor_;
-        // monitor_left_++;
 
         current_monitor_end_time_ == NULL;
       }
@@ -59,7 +56,6 @@ bool PCCSender::OnPacketSent(
 }
 
 void PCCSender::start_monitor(QuicTime sent_time){
-  // previous_monitor_ = current_monitor_;
   current_monitor_ = (current_monitor_ + 1) % NUM_MONITOR;
   // TODO : on MonitorStart  
 
@@ -81,7 +77,6 @@ void PCCSender::start_monitor(QuicTime sent_time){
   mointors_[current_monitor_].end_time = NULL;
   mointors_[current_monitor_].end_transmission_time = NULL;
 
-  // if_monitor_ = true;
 }
 
 void PCCSender::OnCongestionEvent(

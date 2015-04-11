@@ -26,7 +26,7 @@ enum State {
   FINISHED
 };
 
-struct pcc_monitor {
+struct PCCMonitor {
   // for state, 1=sending, 2= waiting, 3=finished
   State state;
 
@@ -39,15 +39,6 @@ struct pcc_monitor {
   int total;
   int ack;
   int lost;
-  // int retransmission;
-  // int new_transmission;
-
-  // latency statics
-  // int32_t latency;
-  // int32_t latency_seq_start;
-  // int32_t latency_seq_end;
-  // int32_t latency_time_start;
-  // int32_t latency_time_end;
 };
 
 const int NUM_MONITOR = 100;
@@ -96,13 +87,10 @@ class NET_EXPORT_PRIVATE PCCSender : public SendAlgorithmInterface {
  	const QuicTime::Delta alarm_granularity_ = QuicTime::Delta::FromMilliseconds(1);
 
   // PCC monitor variable
-  // bool if_monitor_;
   MonitorNumber current_monitor_;
-  // MonitorNumber previous_monitor_;
-  // int monitor_left_;
   QuicTime current_monitor_end_time_;
 
-  pcc_monitor monitors_[NUM_MONITOR];
+  PCCMonitor monitors_[NUM_MONITOR];
   std::map<QuicPacketSequenceNumber, MonitorNumber> seq_monitor_map_;
   std::map<QuicPacketSequenceNumber, MonitorNumber> end_seq_monitor_map_;
   const RttStats* rtt_stats_;
