@@ -25,6 +25,7 @@ enum State {
 struct pcc_monitor {
   // for state, 1=sending, 2= waiting, 3=finished
   State state;
+  QuicPacketSequenceNumber last_packet_seq;
 
   // time statics  
   QuicTime start_time;

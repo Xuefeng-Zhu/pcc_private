@@ -38,12 +38,17 @@ bool PCCSender::OnPacketSent(
     HasRetransmittableData has_retransmittable_data) {
 
     // TODO : case for retransmission
-    if (current_monitor_end_time_ == NULL){
+    if (current_monitor_end_time_ == NULL) {
       start_monitor();
     } else {
       QuicTime::Delta diff = sent_time.Subtract(current_monitor_end_time_);
-      if (diff.ToMicroseconds() > 0){
+      if (diff.ToMicroseconds() > 0) {
         mointors_[current_monitor_].end_transmission_time = sent_time;
+        mointors_[current_monitor_].state = WAITING;
+        mointors_[current_monitor_].last_packet_seq = sequence_number;
+        monitor_left_++;
+
+        current_monitor_end_time_ == NULL;
       }
     }
 
@@ -58,7 +63,7 @@ void PCCSender::start_monitor(QuicTime sent_time){
   // calculate monitor interval and monitor end time
   double rand_factor = double(rand() % 3) / 10;
   int64 srtt = rtt_stats_.smoothed_rtt().ToMicroseconds();
-  if (srtt == 0){
+  if (srtt == 0) {
     srtt = rtt_stats_.initial_rtt_us();
   }
   QuicTime::Delta monitor_interval = 
@@ -81,19 +86,19 @@ void PCCSender::OnCongestionEvent(
     QuicByteCount bytes_in_flight,
     const CongestionVector& acked_packets,
     const CongestionVector& lost_packets) {
-  printf("\n");
-  printf("event\n");
-  printf("rtt updated: %d\n", rtt_updated);
-  printf("bytes in flight: %lu\n", bytes_in_flight);
-  int size = acked_packets.size();
-  printf("acked packets\n");
-  for(int i = 0; i < size; i++){
-    printf("sequence Number:%lu \n", (QuicPacketSequenceNumber)acked_packets[i].first);
+  bool is_prev_monitor_end = false;
+
+  for (CongestionVector::const_iterator it = lost_packets.begin();
+       it != lost_packets.end(); ++it) {
+    if (it->first == mointors_[previous_monitor_].last_packet_seq) {
+      is_prev_monitor_end = true;
+    }
   }
-  size = lost_packets.size();
-  printf("lost packets\n");
-  for(int i = 0; i < size; i++){
-    printf("Sequence Number:%lu \n", (QuicPacketSequenceNumber)lost_packets[i].first);
+  for (CongestionVector::const_iterator it = acked_packets.begin();
+       it != acked_packets.end(); ++it) {
+    if (it->first == mointors_[previous_monitor_].last_packet_seq) {
+      is_prev_monitor_end = true;
+    }
   }
 }
 
