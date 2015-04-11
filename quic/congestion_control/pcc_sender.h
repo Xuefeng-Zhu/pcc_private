@@ -1,6 +1,8 @@
 #ifndef NET_QUIC_CONGESTION_CONTROL_PCC_SENDER_H_
 #define NET_QUIC_CONGESTION_CONTROL_PCC_SENDER_H_
 
+# include <map>
+
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
 #include "net/base/net_export.h"
@@ -16,6 +18,8 @@
 
 namespace net {
 
+typedef int MonitorNumber;
+
 enum State {
   SENDING,
   WAITING,
@@ -25,7 +29,6 @@ enum State {
 struct pcc_monitor {
   // for state, 1=sending, 2= waiting, 3=finished
   State state;
-  QuicPacketSequenceNumber last_packet_seq;
 
   // time statics  
   QuicTime start_time;
@@ -47,7 +50,7 @@ struct pcc_monitor {
   // int32_t latency_time_end;
 };
 
-const int MONITOR_NUM = 100;
+const int NUM_MONITOR = 100;
 
 class RttStats;
 
@@ -94,16 +97,22 @@ class NET_EXPORT_PRIVATE PCCSender : public SendAlgorithmInterface {
 
   // PCC monitor variable
   // bool if_monitor_;
-  int current_monitor_;
-  int previous_monitor_;
-  int monitor_left_;
+  MonitorNumber current_monitor_;
+  // MonitorNumber previous_monitor_;
+  // int monitor_left_;
   QuicTime current_monitor_end_time_;
 
-  pcc_monitor monitors_[MONITOR_NUM];
+  pcc_monitor monitors_[NUM_MONITOR];
+  std::map<QuicPacketSequenceNumber, MonitorNumber> seq_monitor_map_;
+  std::map<QuicPacketSequenceNumber, MonitorNumber> end_seq_monitor_map_;
   const RttStats* rtt_stats_;
 
   // private PCC functions
+  // Start a new monitor
   void start_monitor(QuicTime sent_time);
+  // End previous monitor
+  void end_monitor(QuicPacketSequenceNumber sequence_number);
+
 
   DISALLOW_COPY_AND_ASSIGN(PCCSender);
 };

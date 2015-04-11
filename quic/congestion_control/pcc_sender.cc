@@ -9,7 +9,7 @@ PCCSender::PCCSender(const RttStats* rtt_stats)
     // if_monitor_(false),
     current_monitor_(-1),
     previous_monitor_(-1),
-    monitor_left_(0),
+    // monitor_left_(0),
     current_monitor_end_time_(NULL){
 		printf("pcc\n");
 }
@@ -45,19 +45,22 @@ bool PCCSender::OnPacketSent(
       if (diff.ToMicroseconds() > 0) {
         mointors_[current_monitor_].end_transmission_time = sent_time;
         mointors_[current_monitor_].state = WAITING;
-        mointors_[current_monitor_].last_packet_seq = sequence_number;
-        monitor_left_++;
+        end_seq_monitor_map_[sequence_number] = current_monitor_;
+        // monitor_left_++;
 
         current_monitor_end_time_ == NULL;
       }
     }
 
+    mointors_[current_monitor_].total++;
+    seq_monitor_map_[sequence_number] = current_monitor_;
+
   return true;
 }
 
 void PCCSender::start_monitor(QuicTime sent_time){
-  previous_monitor_ = current_monitor_;
-  current_monitor_ = (current_monitor_ + 1) % MONITOR_NUM;
+  // previous_monitor_ = current_monitor_;
+  current_monitor_ = (current_monitor_ + 1) % NUM_MONITOR;
   // TODO : on MonitorStart  
 
   // calculate monitor interval and monitor end time
@@ -86,19 +89,34 @@ void PCCSender::OnCongestionEvent(
     QuicByteCount bytes_in_flight,
     const CongestionVector& acked_packets,
     const CongestionVector& lost_packets) {
-  bool is_prev_monitor_end = false;
 
   for (CongestionVector::const_iterator it = lost_packets.begin();
        it != lost_packets.end(); ++it) {
-    if (it->first == mointors_[previous_monitor_].last_packet_seq) {
-      is_prev_monitor_end = true;
-    }
+    MonitorNumber monitor_num = seq_monitor_map_[it->first];
+    mointors_[monitor_num].ack++;
+    end_monitor(it->first);
+    seq_monitor_map_.erase(it->first);
   }
   for (CongestionVector::const_iterator it = acked_packets.begin();
        it != acked_packets.end(); ++it) {
-    if (it->first == mointors_[previous_monitor_].last_packet_seq) {
-      is_prev_monitor_end = true;
+    end_monitor(it->first);
+    seq_monitor_map_.erase(it->first);
+  }
+}
+
+void end_monitor(QuicPacketSequenceNumber sequence_number) {
+  std::map<QuicPacketSequenceNumber, MonitorNumber>::iterator it =
+      end_seq_monitor_map_.find(sequence_number);
+  if (it != end_seq_monitor_map_.end()){
+    MonitorNumber prev_monitor_num = it->second;
+    if (mointors_[prev_monitor_num].state == WAITING){
+
+      mointors_[prev_monitor_num].lost = 
+          mointors_[prev_monitor_num].total - mointors_[prev_monitor_num].ack;
+      mointors_[prev_monitor_num].state = FINISHED;
+      // TODO : onMonitorEnd
     }
+    end_seq_monitor_map_.erase(sequence_number);
   }
 }
 
