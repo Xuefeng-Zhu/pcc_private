@@ -37,7 +37,7 @@ bool PCCSender::OnPacketSent(
 
     // TODO : case for retransmission
     if (current_monitor_end_time_ == NULL) {
-      start_monitor();
+      StartMonitor();
     } else {
       QuicTime::Delta diff = sent_time.Subtract(current_monitor_end_time_);
       if (diff.ToMicroseconds() > 0) {
@@ -56,9 +56,9 @@ bool PCCSender::OnPacketSent(
   return true;
 }
 
-void PCCSender::start_monitor(QuicTime sent_time){
+void PCCSender::StartMonitor(QuicTime sent_time){
   current_monitor_ = (current_monitor_ + 1) % NUM_MONITOR;
-  // TODO : on MonitorStart  
+  OnMonitorStart(current_monitor_);
 
   // calculate monitor interval and monitor end time
   double rand_factor = double(rand() % 3) / 10;
@@ -92,7 +92,7 @@ void PCCSender::OnCongestionEvent(
     PacketInfo packet_info = {it->second->sent_time, it->second->bytes_sent};
     mointors_[monitor_num].ack_packet_map[it->first] = packet_info;
 
-    end_monitor(it->first);
+    EndMonitor(it->first);
     seq_monitor_map_.erase(it->first);
   }
   for (CongestionVector::const_iterator it = acked_packets.begin();
@@ -101,12 +101,12 @@ void PCCSender::OnCongestionEvent(
     PacketInfo packet_info = {it->second->sent_time, it->second->bytes_sent};
     mointors_[monitor_num].lost_packet_map[it->first] = packet_info;
 
-    end_monitor(it->first);
+    EndMonitor(it->first);
     seq_monitor_map_.erase(it->first);
   }
 }
 
-void end_monitor(QuicPacketSequenceNumber sequence_number) {
+void EndMonitor(QuicPacketSequenceNumber sequence_number) {
   std::map<QuicPacketSequenceNumber, MonitorNumber>::iterator it =
       end_seq_monitor_map_.find(sequence_number);
   if (it != end_seq_monitor_map_.end()){
@@ -183,10 +183,10 @@ CongestionControlType PCCSender::GetCongestionControlType() const {
 
 PCCUtility::PCCUtility()
   : current_rate_(1),
-    prevoius_rate_(1),
-    previous_utility_(0),
+    previous_utility_(-10000),
     previous_rtt_(0),
     if_starting_phase_(false),
+    previous_monitor_(-1),
     if_make_guess_(false),
     if_recording_guess_(false),
     num_recorded_(0),
@@ -197,13 +197,16 @@ PCCUtility::PCCUtility()
     if_initial_moving_phase_(false),
     change_direction_(0),
     change_intense_(1) {
+    for (int i = 0; i < NUM_MONITOR; i++) {
+      start_rate_array[i] = 0;
+    }
     printf("pcc_utility\n");
   }
 
-void PCCUtility::onMonitorStart(MonitorNumber current_monitor) {
+void PCCUtility::OnMonitorStart(MonitorNumber current_monitor) {
   if (if_starting_phase_) {
-    prevoius_rate_ = current_rate_;
     current_rate_ *= 2;
+    start_rate_array[current_monitor] = current_rate_;
 
     return;
   }
@@ -241,6 +244,98 @@ void PCCUtility::onMonitorStart(MonitorNumber current_monitor) {
   }
 }
 
+void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor, RttStats* rtt_stats, MonitorNumber current_monitor, MonitorNumber end_monitor) {
+
+  double total = GetBytesSum(pcc_monitor.total_packet_map);
+  double loss = GetBytesSum(pcc_monitor.lost_packet_map);
+  loss == loss < 0 ? 0 : loss;
+
+  int64 time = pcc_monitor.end_transmission_time.Subtract(pcc_monitor.start_time).ToMicroseconds();
+
+  int64 srtt = rtt_stats.smoothed_rtt().ToMicroseconds();
+  if (previous_rtt_ == 0) previous_rtt_ = srtt;
+
+  double current_utility = ((total-loss)/time*(1-1/(1+exp(-1000*(loss/total-0.05)))) * (1-1/(1+exp(-80*(1-previous_rtt_/srtt)))) - 1*loss/time) / 1*1000;
+
+  previous_rtt_ = srtt;
+
+  if (end_monitor == 0 && if_starting_phase_) current_utility /= 2;
+
+  if (if_starting_phase_) {
+    if (end_monitor - previous_monitor_ > 1) {
+        if_starting_phase_ = false;
+        if_make_guess_ = true;
+      if (previous_monitor_ == -1) {
+        current_rate_ = start_rate_array[0];
+      } else {
+        current_rate_ = start_rate_array[previous_monitor_];
+      }
+      return;
+    }
+
+    if (previous_utility_ < current_utility) {
+      previous_utility_ = current_utility;
+      previous_monitor_ = end_monitor;
+      return;
+    } else {
+      if_starting_phase_ = false;
+      if_make_guess_ = true;
+      current_rate_ = start_rate_array[previous_monitor_];
+      return;
+    }
+  }
+
+  if (if_recording_guess_) {
+    // find corresponding monitor
+    for (int i = 0; i < NUMBER_OF_PROBE; i++) {
+      if (end_monitor == guess_stat_bucket[i].monitor) {
+        num_recorded_++;
+        guess_stat_bucket[i].utility = current_utility;
+      }
+    }
+
+    if (num_recorded_ == NUMBER_OF_PROBE) {
+      num_recorded_ = 0;
+      int decision = 0;
+
+      for (int i = 0; i < NUMBER_OF_PROBE; i += 2) {
+        bool case1 = guess_stat_bucket[i].utility > guess_stat_bucket[i+1].utility && guess_stat_bucket[i].rate > guess_stat_bucket[i+1].rate;
+        bool case2 = guess_stat_bucket[i].utility < guess_stat_bucket[i+1].utility && guess_stat_bucket[i].rate < guess_stat_bucket[i+1].rate; 
+
+        if (case1 || case2) {
+          decision += 1;
+        } else {
+          decision -= 1;
+        }
+      }
+
+      if_recording_guess_ = false;
+      if (decision == 0) {
+        if_make_guess_ = true;
+      } else {
+        change_direction_ = decision > 0 ? 1 : -1;
+        change_intense_ = 1;
+        double change_amount (continous_guess_count_/2+1) * change_intense_ * change_direction_ * GRANULARITY * current_rate_;
+        current_rate_ += change_amount; 
+
+        previous_utility_ = 0;
+        continous_guess_count_ = 0;
+        tartger_monitor_ = (current_monitor + 1) % NUM_MONITOR;
+        if_initial_moving_phase_ = true;
+      }
+    }
+
+  }
+}
+
+QuicByteCount PCCUtility::GetBytesSum(std::map<QuicPacketSequenceNumber , PacketInfo> packet_map) {
+  QuicByteCount sum = 0;
+  for (std::map<QuicPacketSequenceNumber , PacketInfo>::iterator it = packet_map.begin(); it != packet_map.end(); ++it) {
+    sum += it->second.bytes;
+  }
+
+  return sum;
+}
 }  // namespace net
 
 

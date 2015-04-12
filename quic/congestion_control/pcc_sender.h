@@ -60,18 +60,19 @@ class PCCUtility {
  public:
   PCCUtility();
   // Callback function when monitor starts
-  void onMonitorStart(MonitorNumber current_monitor);
+  void OnMonitorStart(MonitorNumber current_monitor);
 
   // Callback function when monitor ends
-  void onMonitorEnd();
+  void OnMonitorEnd(PCCMonitor pcc_monitor, RttStats* rtt_stats, MonitorNumber current_monitor, MonitorNumber end_monitor);
 
  private:
   double current_rate_;
-  double prevoius_rate_;
   double previous_utility_;
   double previous_rtt_
 
   bool if_starting_phase_;
+  double start_rate_array[NUM_MONITOR];
+  MonitorNumber previous_monitor_;
 
   // variables used for guess phase 
   bool if_make_guess_;
@@ -89,6 +90,8 @@ class PCCUtility {
 
   int change_direction_;
   int change_intense_;
+
+  QuicByteCount GetBytesSum(std::map<QuicPacketSequenceNumber , PacketInfo> packet_map);
 };
 
 class RttStats;
@@ -147,9 +150,9 @@ class NET_EXPORT_PRIVATE PCCSender : public SendAlgorithmInterface {
 
   // private PCC functions
   // Start a new monitor
-  void start_monitor(QuicTime sent_time);
+  void StartMonitor(QuicTime sent_time);
   // End previous monitor
-  void end_monitor(QuicPacketSequenceNumber sequence_number);
+  void EndMonitor(QuicPacketSequenceNumber sequence_number);
 
 
   DISALLOW_COPY_AND_ASSIGN(PCCSender);
