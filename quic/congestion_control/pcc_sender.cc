@@ -58,7 +58,7 @@ bool PCCSender::OnPacketSent(
 
 void PCCSender::StartMonitor(QuicTime sent_time){
   current_monitor_ = (current_monitor_ + 1) % NUM_MONITOR;
-  OnMonitorStart(current_monitor_);
+  pcc_utility_.OnMonitorStart(current_monitor_);
 
   // calculate monitor interval and monitor end time
   double rand_factor = double(rand() % 3) / 10;
@@ -116,7 +116,7 @@ void PCCSender::EndMonitor(QuicPacketSequenceNumber sequence_number) {
       mointors_[prev_monitor_num].lost = 
           mointors_[prev_monitor_num].total - mointors_[prev_monitor_num].ack;
       mointors_[prev_monitor_num].state = FINISHED;
-      // TODO : onMonitorEnd
+      pcc_utility_.OnMonitorEnd(mointors_[prev_monitor_num], rtt_stats_, current_monitor_, prev_monitor_num);
     }
     end_seq_monitor_map_.erase(sequence_number);
   }
@@ -355,7 +355,7 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor, RttStats* rtt_stats, Monit
         if_initial_moving_phase_ = false;
       } else {
         current_rate_ -= change_amount;
-        if_moving_phase_ =false;
+        if_moving_phase_ = false;
         if_make_guess_ = true;
       }
     }
