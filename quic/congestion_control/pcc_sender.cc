@@ -106,7 +106,7 @@ void PCCSender::OnCongestionEvent(
   }
 }
 
-void EndMonitor(QuicPacketSequenceNumber sequence_number) {
+void PCCSender::EndMonitor(QuicPacketSequenceNumber sequence_number) {
   std::map<QuicPacketSequenceNumber, MonitorNumber>::iterator it =
       end_seq_monitor_map_.find(sequence_number);
   if (it != end_seq_monitor_map_.end()){
@@ -315,13 +315,48 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor, RttStats* rtt_stats, Monit
       } else {
         change_direction_ = decision > 0 ? 1 : -1;
         change_intense_ = 1;
-        double change_amount (continous_guess_count_/2+1) * change_intense_ * change_direction_ * GRANULARITY * current_rate_;
+        double change_amount = (continous_guess_count_/2+1) * change_intense_ * change_direction_ * GRANULARITY * current_rate_;
         current_rate_ += change_amount; 
 
         previous_utility_ = 0;
         continous_guess_count_ = 0;
         tartger_monitor_ = (current_monitor + 1) % NUM_MONITOR;
         if_initial_moving_phase_ = true;
+      }
+      return;
+    }
+
+    // moving phase
+    if (end_monitor == tartger_monitor_) {
+      double tmp_rate = total * 12 / time / 1000;
+      if (current_rate_ - tmp_rate > 10 && current_rate_ > 200) {
+        current_rate_ = tmp_rate;
+
+        if_make_guess_ = true;
+        if_moving_phase_ = false;
+        if_initial_moving_phase_ = false;
+
+        change_direction_ = 0;
+        change_intense_ = 1;
+
+        guess_time_ = 0;
+      }
+
+      if (if_initial_moving_phase_ || current_utility > previous_utility_){
+        change_intense_ += 1;
+        tartger_monitor_ = (current_monitor + 1) % NUM_MONITOR;
+      }
+      
+      double change_amount = change_intense_ * GRANULARITY * current_rate_ * change_direction_;
+      previous_utility_ = current_utility;
+
+      if (if_initial_moving_phase_ || current_utility > previous_utility_){
+        current_rate_ += change_amount;
+        if_initial_moving_phase_ = false;
+      } else {
+        current_rate_ -= change_amount;
+        if_moving_phase_ =false;
+        if_make_guess_ = true;
       }
     }
 
