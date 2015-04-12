@@ -45,7 +45,51 @@ struct PCCMonitor {
   std::map<QuicPacketSequenceNumber , PacketInfo> lost_packet_map;
 };
 
+struct GuessStat {
+  MonitorNumber monitor,
+  double rate,
+  double utility
+};
+
 const int NUM_MONITOR = 100;
+const int NUMBER_OF_PROBE = 4;
+const int MAX_COUNTINOUS_GUESS = 5;
+const double GRANULARITY = 0.01;
+
+class PCCUtility {
+ public:
+  PCCUtility();
+  // Callback function when monitor starts
+  void onMonitorStart(MonitorNumber current_monitor);
+
+  // Callback function when monitor ends
+  void onMonitorEnd();
+
+ private:
+  double current_rate_;
+  double prevoius_rate_;
+  double previous_utility_;
+  double previous_rtt_
+
+  bool if_starting_phase_;
+
+  // variables used for guess phase 
+  bool if_make_guess_;
+  bool if_recording_guess_;
+  int num_recorded_;
+  int guess_time_;
+  int continous_guess_count_;
+  GuessStat guess_stat_bucket[NUMBER_OF_PROBE];
+
+
+  // variables used for moving phase
+  MonitorNumber tartger_monitor_;
+  bool if_moving_phase_;
+  bool if_initial_moving_phase_;
+
+  int change_direction_;
+  int change_intense_;
+};
 
 class RttStats;
 
@@ -97,6 +141,8 @@ class NET_EXPORT_PRIVATE PCCSender : public SendAlgorithmInterface {
   PCCMonitor monitors_[NUM_MONITOR];
   std::map<QuicPacketSequenceNumber, MonitorNumber> seq_monitor_map_;
   std::map<QuicPacketSequenceNumber, MonitorNumber> end_seq_monitor_map_;
+
+  PCCUtility pcc_utility_;
   const RttStats* rtt_stats_;
 
   // private PCC functions

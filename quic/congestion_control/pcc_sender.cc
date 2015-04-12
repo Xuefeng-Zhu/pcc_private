@@ -5,7 +5,7 @@
 namespace net {
 
 PCCSender::PCCSender(const RttStats* rtt_stats)
-	: rtt_stats_(rtt_stats),
+  : rtt_stats_(rtt_stats),
     current_monitor_(-1),
     previous_monitor_(-1),
     current_monitor_end_time_(NULL){
@@ -181,6 +181,68 @@ CongestionControlType PCCSender::GetCongestionControlType() const {
   return kPcc;
 }
 
+PCCUtility::PCCUtility()
+  : current_rate_(1),
+    prevoius_rate_(1),
+    previous_utility_(0),
+    previous_rtt_(0),
+    if_starting_phase_(false),
+    if_make_guess_(false),
+    if_recording_guess_(false),
+    num_recorded_(0),
+    guess_time_(0),
+    continous_guess_count_(0),
+    tartger_monitor_(0),
+    if_moving_phase_(false),
+    if_initial_moving_phase_(false),
+    change_direction_(0),
+    change_intense_(1) {
+    printf("pcc_utility\n");
+  }
+
+void PCCUtility::onMonitorStart(MonitorNumber current_monitor) {
+  if (if_starting_phase_) {
+    prevoius_rate_ = current_rate_;
+    current_rate_ *= 2;
+
+    return;
+  }
+
+  if (if_make_guess_) {
+    if (guess_time_ == 0 && continous_guess_count_ == MAX_COUNTINOUS_GUESS) {
+      continous_guess_count_ = 0;
+    }
+
+    if (guess_time_ == 0) {
+      if_recording_guess_ = true;
+
+      continous_guess_count_++;
+
+      for (int i = 0; i < NUMBER_OF_PROBE; i += 2) {
+        int rand_dir = rand() % 2 * 2 - 1;
+
+        guess_stat_bucket[i].rate = current_rate_ + rand_dir * continous_guess_count_ * GRANULARITY * current_rate_;
+        guess_stat_bucket[i + 1].rate = current_rate_ - rand_dir * continous_guess_count_ * GRANULARITY * current_rate_;  
+  
+      }
+
+      for (int i = 0; i < NUMBER_OF_PROBE; i++) {
+        guess_stat_bucket[i].monitor = (current_monitor + i) % NUM_MONITOR;
+      }
+    }
+
+    current_rate_ = guess_stat_bucket[guess_time_].rate;
+    guess_time_++;
+
+    if (guess_time_ == NUMBER_OF_PROBE) {
+      if_make_guess_ = false;
+      guess_time_ = 0;
+    }
+  }
+}
+
 }  // namespace net
+
+
 
 
