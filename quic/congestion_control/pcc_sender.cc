@@ -6,8 +6,7 @@ namespace net {
 
 PCCSender::PCCSender(const RttStats* rtt_stats)
   : rtt_stats_(rtt_stats),
-    current_monitor_(-1),
-    previous_monitor_(-1){
+    current_monitor_(-1){
   current_monitor_end_time_ = QuicTime::Zero();
 	printf("pcc\n");
 }
@@ -37,7 +36,7 @@ bool PCCSender::OnPacketSent(
 
     // TODO : case for retransmission
     if (current_monitor_end_time_.Subtract(QuicTime::Zero()).IsZero()) {
-      StartMonitor();
+      StartMonitor(sent_time);
     } else {
       QuicTime::Delta diff = sent_time.Subtract(current_monitor_end_time_);
       if (diff.ToMicroseconds() > 0) {
@@ -50,7 +49,7 @@ bool PCCSender::OnPacketSent(
     }
 
     PacketInfo packet_info = {sent_time, bytes};
-    monitors_[current_monitor_].total_packet_map = packet_info;
+    monitors_[current_monitor_].total_packet_map[sequence_number] = packet_info;
     seq_monitor_map_[sequence_number] = current_monitor_;
 
   return true;
@@ -62,9 +61,9 @@ void PCCSender::StartMonitor(QuicTime sent_time){
 
   // calculate monitor interval and monitor end time
   double rand_factor = double(rand() % 3) / 10;
-  int64 srtt = rtt_stats_.smoothed_rtt().ToMicroseconds();
+  int64 srtt = rtt_stats_->smoothed_rtt().ToMicroseconds();
   if (srtt == 0) {
-    srtt = rtt_stats_.initial_rtt_us();
+    srtt = rtt_stats_->initial_rtt_us();
   }
   QuicTime::Delta monitor_interval = 
       QuicTime::Delta::FromMicroseconds(srtt * (1.5 + rand_factor));
@@ -72,8 +71,8 @@ void PCCSender::StartMonitor(QuicTime sent_time){
 
   monitors_[current_monitor_].state = SENDING;
   monitors_[current_monitor_].start_time = sent_time;
-  monitors_[current_monitor_].end_time = NULL;
-  monitors_[current_monitor_].end_transmission_time = NULL;
+  monitors_[current_monitor_].end_time = QuicTime::Zero();
+  monitors_[current_monitor_].end_transmission_time = QuicTime::Zero();
 
 }
 
@@ -86,7 +85,7 @@ void PCCSender::OnCongestionEvent(
   for (CongestionVector::const_iterator it = lost_packets.cbegin();
        it != lost_packets.cend(); ++it) {
     MonitorNumber monitor_num = seq_monitor_map_[it->first];
-    PacketInfo packet_info = {it->second->sent_time, it->second->bytes_sent};
+    PacketInfo packet_info = {it->second.sent_time, it->second.bytes_sent};
     monitors_[monitor_num].ack_packet_map[it->first] = packet_info;
 
     EndMonitor(it->first);
@@ -110,8 +109,6 @@ void PCCSender::EndMonitor(QuicPacketSequenceNumber sequence_number) {
     MonitorNumber prev_monitor_num = it->second;
     if (monitors_[prev_monitor_num].state == WAITING){
 
-      monitors_[prev_monitor_num].lost = 
-          monitors_[prev_monitor_num].total - monitors_[prev_monitor_num].ack;
       monitors_[prev_monitor_num].state = FINISHED;
       pcc_utility_.OnMonitorEnd(monitors_[prev_monitor_num], rtt_stats_, current_monitor_, prev_monitor_num);
     }
