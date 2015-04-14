@@ -1520,6 +1520,8 @@
         {
           'target_name': 'quic_client',
           'type': 'executable',
+          'cflags': ['-pg'],
+          'ldflags': ['-pg'],
           'dependencies': [
             '../base/base.gyp:base',
             'net',
@@ -1532,6 +1534,8 @@
         {
           'target_name': 'quic_server',
           'type': 'executable',
+          'cflags': ['-pg'],
+          'ldflags': ['-pg'],
           'dependencies': [
             '../base/base.gyp:base',
             'net',

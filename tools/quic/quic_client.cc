@@ -89,7 +89,7 @@ bool QuicClient::Initialize() {
   DCHECK(!initialized_);
   // If an initial flow control window has not explicitly been set, then use the
   // same value that Chrome uses: 10 Mb.
-  const uint32 kInitialFlowControlWindow = 10 * 1024 * 1024;  // 10 Mb
+  const uint32 kInitialFlowControlWindow = 100 * 1024 * 1024;  // 10 Mb
   if (config_.GetInitialStreamFlowControlWindowToSend() ==
       kMinimumFlowControlSendWindow) {
     config_.SetInitialStreamFlowControlWindowToSend(kInitialFlowControlWindow);
@@ -199,7 +199,7 @@ bool QuicClient::Connect() {
 void QuicClient::StartConnect() {
   DCHECK(initialized_);
   DCHECK(!connected());
-  
+
   QuicPacketWriter* writer = CreateQuicPacketWriter();
 
   DummyPacketWriterFactory factory(writer);
@@ -223,7 +223,7 @@ void QuicClient::StartConnect() {
   if (writer_.get() != writer) {
     writer_.reset(writer);
   }
-  
+
   session_->InitializeSession(server_id_, &crypto_config_);
   session_->CryptoConnect();
 }

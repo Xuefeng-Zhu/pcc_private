@@ -1,13 +1,26 @@
 #include "net/quic/congestion_control/pcc_sender.h"
+#include "net/quic/congestion_control/rtt_stats.h"
 
 #include <stdio.h>
 
 namespace net {
 
+PCCMonitor::PCCMonitor()
+  : start_time(QuicTime::Zero()),
+    end_time(QuicTime::Zero()),
+    end_transmission_time(QuicTime::Zero()){
+
+}
+
+PCCMonitor::~PCCMonitor(){
+
+}
+
+
 PCCSender::PCCSender(const RttStats* rtt_stats)
-  : rtt_stats_(rtt_stats),
-    current_monitor_(-1){
-  current_monitor_end_time_ = QuicTime::Zero();
+  : current_monitor_(-1),
+    current_monitor_end_time_(QuicTime::Zero()),
+    rtt_stats_(rtt_stats){
 	printf("pcc\n");
 }
 
@@ -44,11 +57,13 @@ bool PCCSender::OnPacketSent(
         monitors_[current_monitor_].state = WAITING;
         end_seq_monitor_map_[sequence_number] = current_monitor_;
 
-        current_monitor_end_time_ == NULL;
+        current_monitor_end_time_ = QuicTime::Zero();
       }
     }
 
-    PacketInfo packet_info = {sent_time, bytes};
+    PacketInfo packet_info;
+    packet_info.sent_time = sent_time;
+    packet_info.bytes = bytes;
     monitors_[current_monitor_].total_packet_map[sequence_number] = packet_info;
     seq_monitor_map_[sequence_number] = current_monitor_;
 
@@ -85,7 +100,9 @@ void PCCSender::OnCongestionEvent(
   for (CongestionVector::const_iterator it = lost_packets.cbegin();
        it != lost_packets.cend(); ++it) {
     MonitorNumber monitor_num = seq_monitor_map_[it->first];
-    PacketInfo packet_info = {it->second.sent_time, it->second.bytes_sent};
+    PacketInfo packet_info;
+    packet_info.sent_time = it->second.sent_time;
+    packet_info.bytes = it->second.bytes_sent;
     monitors_[monitor_num].ack_packet_map[it->first] = packet_info;
 
     EndMonitor(it->first);
@@ -94,7 +111,9 @@ void PCCSender::OnCongestionEvent(
   for (CongestionVector::const_iterator it = acked_packets.cbegin();
        it != acked_packets.cend(); ++it) {
     MonitorNumber monitor_num = seq_monitor_map_[it->first];
-    PacketInfo packet_info = {it->second->sent_time, it->second->bytes_sent};
+    PacketInfo packet_info;
+    packet_info.sent_time = it->second.sent_time;
+    packet_info.bytes = it->second.bytes_sent;
     monitors_[monitor_num].lost_packet_map[it->first] = packet_info;
 
     EndMonitor(it->first);
@@ -128,14 +147,6 @@ QuicTime::Delta PCCSender::TimeUntilSend(
       QuicTime now,
       QuicByteCount bytes_in_flight,
       HasRetransmittableData has_retransmittable_data) const {
-  return QuicTime::Delta::Zero();
-  //printf("pcc pacing\n");
-  if (ideal_next_packet_send_time_ > now.Add(alarm_granularity_)) {
-    //DVLOG(1) << "Delaying packet: "
-    //         << ideal_next_packet_send_time_.Subtract(now).ToMicroseconds();
-    was_last_send_delayed_ = true;
-    return ideal_next_packet_send_time_.Subtract(now);
-  }
   return QuicTime::Delta::Zero();
 }
 
@@ -238,15 +249,14 @@ void PCCUtility::OnMonitorStart(MonitorNumber current_monitor) {
   }
 }
 
-void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor, RttStats* rtt_stats, MonitorNumber current_monitor, MonitorNumber end_monitor) {
+void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor, const RttStats* rtt_stats, MonitorNumber current_monitor, MonitorNumber end_monitor) {
 
   double total = GetBytesSum(pcc_monitor.total_packet_map);
   double loss = GetBytesSum(pcc_monitor.lost_packet_map);
-  loss == loss < 0 ? 0 : loss;
 
   int64 time = pcc_monitor.end_transmission_time.Subtract(pcc_monitor.start_time).ToMicroseconds();
 
-  int64 srtt = rtt_stats.smoothed_rtt().ToMicroseconds();
+  int64 srtt = rtt_stats->smoothed_rtt().ToMicroseconds();
   if (previous_rtt_ == 0) previous_rtt_ = srtt;
 
   double current_utility = ((total-loss)/time*(1-1/(1+exp(-1000*(loss/total-0.05)))) * (1-1/(1+exp(-80*(1-previous_rtt_/srtt)))) - 1*loss/time) / 1*1000;
@@ -359,7 +369,7 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor, RttStats* rtt_stats, Monit
 
 QuicByteCount PCCUtility::GetBytesSum(std::map<QuicPacketSequenceNumber , PacketInfo> packet_map) {
   QuicByteCount sum = 0;
-  for (std::map<QuicPacketSequenceNumber , PacketInfo>::iterator it = packet_map.cbegin(); it != packet_map.cend(); ++it) {
+  for (std::map<QuicPacketSequenceNumber , PacketInfo>::iterator it = packet_map.begin(); it != packet_map.end(); ++it) {
     sum += it->second.bytes;
   }
 

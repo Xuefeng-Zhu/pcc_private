@@ -55,9 +55,9 @@ const QuicByteCount kDefaultMaxPacketSize = 1350;
 // minus the IP and UDP headers. IPv6 has a 40 byte header, UPD adds an
 // additional 8 bytes.  This is a total overhead of 48 bytes.  Ethernet's
 // max packet size is 1500 bytes,  1500 - 48 = 1452.
-const QuicByteCount kMaxPacketSize = 1452;
+const QuicByteCount kMaxPacketSize = 14520;
 // Default maximum packet size used in Linux TCP implementations.
-const QuicByteCount kDefaultTCPMSS = 1460;
+const QuicByteCount kDefaultTCPMSS = 14600;
 
 // We match SPDY's use of 32 when secure (since we'd compete with SPDY).
 const QuicPacketCount kInitialCongestionWindowSecure = 32;
@@ -65,16 +65,16 @@ const QuicPacketCount kInitialCongestionWindowSecure = 32;
 const QuicPacketCount kInitialCongestionWindowInsecure = 20;
 
 // Minimum size of initial flow control window, for both stream and session.
-const uint32 kMinimumFlowControlSendWindow = 16 * 1024;  // 16 KB
+const uint32 kMinimumFlowControlSendWindow = 16 * 1024 * 1024;  // 16 KB
 
 // Minimum size of the CWND, in packets, when doing bandwidth resumption.
 const QuicPacketCount kMinCongestionWindowForBandwidthResumption = 10;
 
 // Maximum size of the CWND, in packets, for TCP congestion control algorithms.
-const QuicPacketCount kMaxTcpCongestionWindow = 200;
+const QuicPacketCount kMaxTcpCongestionWindow = 2000;
 
 // Default size of the socket receive buffer in bytes.
-const QuicByteCount kDefaultSocketReceiveBuffer = 256 * 1024;
+const QuicByteCount kDefaultSocketReceiveBuffer = 256 * 1024 * 1024;
 // Minimum size of the socket receive buffer in bytes.
 // Smaller values are ignored.
 const QuicByteCount kMinSocketReceiveBuffer = 16 * 1024;
