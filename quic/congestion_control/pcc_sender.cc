@@ -71,9 +71,6 @@ void PCCSender::StartMonitor(QuicTime sent_time){
   current_monitor_end_time_ = sent_time.Add(monitor_interval);
 
   mointors_[current_monitor_].state = SENDING;
-  mointors_[current_monitor_].ack = 0;
-  mointors_[current_monitor_].lost = 0;
-  mointors_[current_monitor_].total = 0;
   mointors_[current_monitor_].start_time = sent_time;
   mointors_[current_monitor_].end_time = NULL;
   mointors_[current_monitor_].end_transmission_time = NULL;
@@ -86,8 +83,8 @@ void PCCSender::OnCongestionEvent(
     const CongestionVector& acked_packets,
     const CongestionVector& lost_packets) {
 
-  for (CongestionVector::const_iterator it = lost_packets.begin();
-       it != lost_packets.end(); ++it) {
+  for (CongestionVector::const_iterator it = lost_packets.cbegin();
+       it != lost_packets.cend(); ++it) {
     MonitorNumber monitor_num = seq_monitor_map_[it->first];
     PacketInfo packet_info = {it->second->sent_time, it->second->bytes_sent};
     mointors_[monitor_num].ack_packet_map[it->first] = packet_info;
@@ -95,8 +92,8 @@ void PCCSender::OnCongestionEvent(
     EndMonitor(it->first);
     seq_monitor_map_.erase(it->first);
   }
-  for (CongestionVector::const_iterator it = acked_packets.begin();
-       it != acked_packets.end(); ++it) {
+  for (CongestionVector::const_iterator it = acked_packets.cbegin();
+       it != acked_packets.cend(); ++it) {
     MonitorNumber monitor_num = seq_monitor_map_[it->first];
     PacketInfo packet_info = {it->second->sent_time, it->second->bytes_sent};
     mointors_[monitor_num].lost_packet_map[it->first] = packet_info;
@@ -365,7 +362,7 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor, RttStats* rtt_stats, Monit
 
 QuicByteCount PCCUtility::GetBytesSum(std::map<QuicPacketSequenceNumber , PacketInfo> packet_map) {
   QuicByteCount sum = 0;
-  for (std::map<QuicPacketSequenceNumber , PacketInfo>::iterator it = packet_map.begin(); it != packet_map.end(); ++it) {
+  for (std::map<QuicPacketSequenceNumber , PacketInfo>::iterator it = packet_map.cbegin(); it != packet_map.cend(); ++it) {
     sum += it->second.bytes;
   }
 
