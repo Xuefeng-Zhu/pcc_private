@@ -7,9 +7,9 @@ namespace net {
 PCCSender::PCCSender(const RttStats* rtt_stats)
   : rtt_stats_(rtt_stats),
     current_monitor_(-1),
-    previous_monitor_(-1),
-    current_monitor_end_time_(){
-		printf("pcc\n");
+    previous_monitor_(-1){
+  current_monitor_end_time_ = QuicTime::Zero();
+	printf("pcc\n");
 }
 
 PCCSender::~PCCSender() {}
@@ -36,13 +36,13 @@ bool PCCSender::OnPacketSent(
     HasRetransmittableData has_retransmittable_data) {
 
     // TODO : case for retransmission
-    if (current_monitor_end_time_ == NULL) {
+    if (current_monitor_end_time_.Subtract(QuicTime::Zero()).IsZero()) {
       StartMonitor();
     } else {
       QuicTime::Delta diff = sent_time.Subtract(current_monitor_end_time_);
       if (diff.ToMicroseconds() > 0) {
-        mointors_[current_monitor_].end_transmission_time = sent_time;
-        mointors_[current_monitor_].state = WAITING;
+        monitors_[current_monitor_].end_transmission_time = sent_time;
+        monitors_[current_monitor_].state = WAITING;
         end_seq_monitor_map_[sequence_number] = current_monitor_;
 
         current_monitor_end_time_ == NULL;
@@ -50,7 +50,7 @@ bool PCCSender::OnPacketSent(
     }
 
     PacketInfo packet_info = {sent_time, bytes};
-    mointors_[current_monitor_].total_packet_map = packet_info;
+    monitors_[current_monitor_].total_packet_map = packet_info;
     seq_monitor_map_[sequence_number] = current_monitor_;
 
   return true;
@@ -70,10 +70,10 @@ void PCCSender::StartMonitor(QuicTime sent_time){
       QuicTime::Delta::FromMicroseconds(srtt * (1.5 + rand_factor));
   current_monitor_end_time_ = sent_time.Add(monitor_interval);
 
-  mointors_[current_monitor_].state = SENDING;
-  mointors_[current_monitor_].start_time = sent_time;
-  mointors_[current_monitor_].end_time = NULL;
-  mointors_[current_monitor_].end_transmission_time = NULL;
+  monitors_[current_monitor_].state = SENDING;
+  monitors_[current_monitor_].start_time = sent_time;
+  monitors_[current_monitor_].end_time = NULL;
+  monitors_[current_monitor_].end_transmission_time = NULL;
 
 }
 
@@ -87,7 +87,7 @@ void PCCSender::OnCongestionEvent(
        it != lost_packets.cend(); ++it) {
     MonitorNumber monitor_num = seq_monitor_map_[it->first];
     PacketInfo packet_info = {it->second->sent_time, it->second->bytes_sent};
-    mointors_[monitor_num].ack_packet_map[it->first] = packet_info;
+    monitors_[monitor_num].ack_packet_map[it->first] = packet_info;
 
     EndMonitor(it->first);
     seq_monitor_map_.erase(it->first);
@@ -96,7 +96,7 @@ void PCCSender::OnCongestionEvent(
        it != acked_packets.cend(); ++it) {
     MonitorNumber monitor_num = seq_monitor_map_[it->first];
     PacketInfo packet_info = {it->second->sent_time, it->second->bytes_sent};
-    mointors_[monitor_num].lost_packet_map[it->first] = packet_info;
+    monitors_[monitor_num].lost_packet_map[it->first] = packet_info;
 
     EndMonitor(it->first);
     seq_monitor_map_.erase(it->first);
@@ -108,12 +108,12 @@ void PCCSender::EndMonitor(QuicPacketSequenceNumber sequence_number) {
       end_seq_monitor_map_.find(sequence_number);
   if (it != end_seq_monitor_map_.end()){
     MonitorNumber prev_monitor_num = it->second;
-    if (mointors_[prev_monitor_num].state == WAITING){
+    if (monitors_[prev_monitor_num].state == WAITING){
 
-      mointors_[prev_monitor_num].lost = 
-          mointors_[prev_monitor_num].total - mointors_[prev_monitor_num].ack;
-      mointors_[prev_monitor_num].state = FINISHED;
-      pcc_utility_.OnMonitorEnd(mointors_[prev_monitor_num], rtt_stats_, current_monitor_, prev_monitor_num);
+      monitors_[prev_monitor_num].lost = 
+          monitors_[prev_monitor_num].total - monitors_[prev_monitor_num].ack;
+      monitors_[prev_monitor_num].state = FINISHED;
+      pcc_utility_.OnMonitorEnd(monitors_[prev_monitor_num], rtt_stats_, current_monitor_, prev_monitor_num);
     }
     end_seq_monitor_map_.erase(sequence_number);
   }
