@@ -27,8 +27,8 @@ enum State {
 };
 
 struct PacketInfo {
-  QuicTime sent_time,
-  QuicByteCount bytes
+  QuicTime sent_time;
+  QuicByteCount bytes;
 };
 
 struct PCCMonitor {
@@ -46,9 +46,9 @@ struct PCCMonitor {
 };
 
 struct GuessStat {
-  MonitorNumber monitor,
-  double rate,
-  double utility
+  MonitorNumber monitor;
+  double rate;
+  double utility;
 };
 
 const int NUM_MONITOR = 100;
@@ -68,7 +68,7 @@ class PCCUtility {
  private:
   double current_rate_;
   double previous_utility_;
-  double previous_rtt_
+  double previous_rtt_;
 
   bool if_starting_phase_;
   double start_rate_array[NUM_MONITOR];

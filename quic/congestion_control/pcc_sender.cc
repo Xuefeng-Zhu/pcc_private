@@ -8,7 +8,7 @@ PCCSender::PCCSender(const RttStats* rtt_stats)
   : rtt_stats_(rtt_stats),
     current_monitor_(-1),
     previous_monitor_(-1),
-    current_monitor_end_time_(NULL){
+    current_monitor_end_time_(){
 		printf("pcc\n");
 }
 
