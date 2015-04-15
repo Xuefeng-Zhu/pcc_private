@@ -105,7 +105,7 @@ void PCCSender::OnCongestionEvent(
     const CongestionVector& lost_packets) {
 
   for (CongestionVector::const_iterator it = lost_packets.cbegin();
-       it != lost_packets.cend(); ++it) {
+      it != lost_packets.cend(); ++it) {
     MonitorNumber monitor_num = GetMonitor(it->first);
     int pos = it->first - monitors_[monitor_num].start_seq_num;
     monitors_[monitor_num].packet_vector[pos].state = ACK;
@@ -116,7 +116,7 @@ void PCCSender::OnCongestionEvent(
   }
 
   for (CongestionVector::const_iterator it = acked_packets.cbegin();
-       it != acked_packets.cend(); ++it) {
+      it != acked_packets.cend(); ++it) {
 
     MonitorNumber monitor_num = GetMonitor(it->first);
     int pos = it->first - monitors_[monitor_num].start_seq_num;
@@ -131,7 +131,9 @@ void PCCSender::OnCongestionEvent(
 void PCCSender::EndMonitor(MonitorNumber monitor_num) {
   if (monitors_[monitor_num].state == WAITING){
     monitors_[monitor_num].state = FINISHED;
-    pcc_utility_.OnMonitorEnd(monitors_[monitor_num], rtt_stats_, current_monitor_, monitor_num);
+    pcc_utility_.OnMonitorEnd(monitors_[monitor_num],
+                              rtt_stats_, current_monitor_,
+                              monitor_num);
   }
 }
 
@@ -254,8 +256,10 @@ void PCCUtility::OnMonitorStart(MonitorNumber current_monitor) {
       for (int i = 0; i < NUMBER_OF_PROBE; i += 2) {
         int rand_dir = rand() % 2 * 2 - 1;
 
-        guess_stat_bucket[i].rate = current_rate_ + rand_dir * continous_guess_count_ * GRANULARITY * current_rate_;
-        guess_stat_bucket[i + 1].rate = current_rate_ - rand_dir * continous_guess_count_ * GRANULARITY * current_rate_;  
+        guess_stat_bucket[i].rate = current_rate_ 
+            + rand_dir * continous_guess_count_ * GRANULARITY * current_rate_;
+        guess_stat_bucket[i + 1].rate = current_rate_ 
+            - rand_dir * continous_guess_count_ * GRANULARITY * current_rate_;  
   
       }
 
@@ -274,17 +278,22 @@ void PCCUtility::OnMonitorStart(MonitorNumber current_monitor) {
   }
 }
 
-void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor, const RttStats* rtt_stats, MonitorNumber current_monitor, MonitorNumber end_monitor) {
+void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
+                              const RttStats* rtt_stats,
+                              MonitorNumber current_monitor,
+                              MonitorNumber end_monitor) {
 
   double total = GetBytesSum(pcc_monitor.packet_vector);
   double loss = GetBytesSum(pcc_monitor.packet_vector);
 
-  int64 time = pcc_monitor.end_transmission_time.Subtract(pcc_monitor.start_time).ToMicroseconds();
+  int64 time = 
+      pcc_monitor.end_transmission_time.Subtract(pcc_monitor.start_time).ToMicroseconds();
 
   int64 srtt = rtt_stats->smoothed_rtt().ToMicroseconds();
   if (previous_rtt_ == 0) previous_rtt_ = srtt;
 
-  double current_utility = ((total-loss)/time*(1-1/(1+exp(-1000*(loss/total-0.05)))) * (1-1/(1+exp(-80*(1-previous_rtt_/srtt)))) - 1*loss/time) / 1*1000;
+  double current_utility = ((total-loss)/time*(1-1/(1+exp(-1000*(loss/total-0.05))))
+      * (1-1/(1+exp(-80*(1-previous_rtt_/srtt)))) - 1*loss/time) / 1*1000;
 
   previous_rtt_ = srtt;
 
@@ -328,8 +337,10 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor, const RttStats* rtt_stats,
       int decision = 0;
 
       for (int i = 0; i < NUMBER_OF_PROBE; i += 2) {
-        bool case1 = guess_stat_bucket[i].utility > guess_stat_bucket[i+1].utility && guess_stat_bucket[i].rate > guess_stat_bucket[i+1].rate;
-        bool case2 = guess_stat_bucket[i].utility < guess_stat_bucket[i+1].utility && guess_stat_bucket[i].rate < guess_stat_bucket[i+1].rate; 
+        bool case1 = guess_stat_bucket[i].utility > guess_stat_bucket[i+1].utility 
+            && guess_stat_bucket[i].rate > guess_stat_bucket[i+1].rate;
+        bool case2 = guess_stat_bucket[i].utility < guess_stat_bucket[i+1].utility 
+            && guess_stat_bucket[i].rate < guess_stat_bucket[i+1].rate; 
 
         if (case1 || case2) {
           decision += 1;
@@ -344,7 +355,8 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor, const RttStats* rtt_stats,
       } else {
         change_direction_ = decision > 0 ? 1 : -1;
         change_intense_ = 1;
-        double change_amount = (continous_guess_count_/2+1) * change_intense_ * change_direction_ * GRANULARITY * current_rate_;
+        double change_amount = (continous_guess_count_/2+1) 
+            * change_intense_ * change_direction_ * GRANULARITY * current_rate_;
         current_rate_ += change_amount; 
 
         previous_utility_ = 0;
@@ -376,7 +388,8 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor, const RttStats* rtt_stats,
         tartger_monitor_ = (current_monitor + 1) % NUM_MONITOR;
       }
       
-      double change_amount = change_intense_ * GRANULARITY * current_rate_ * change_direction_;
+      double change_amount = 
+          change_intense_ * GRANULARITY * current_rate_ * change_direction_;
       previous_utility_ = current_utility;
 
       if (if_initial_moving_phase_ || current_utility > previous_utility_){
@@ -394,7 +407,8 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor, const RttStats* rtt_stats,
 
 QuicByteCount PCCUtility::GetBytesSum(std::vector<PacketInfo> packet_vector) {
   QuicByteCount sum = 0;
-  for (std::vector<PacketInfo>::iterator it = packet_vector.begin(); it != packet_vector.end(); ++it) {
+  for (std::vector<PacketInfo>::iterator it = packet_vector.begin();
+      it != packet_vector.end(); ++it) {
     sum += it->bytes;
   }
 

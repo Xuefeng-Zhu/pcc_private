@@ -80,7 +80,10 @@ class PCCUtility {
   void OnMonitorStart(MonitorNumber current_monitor);
 
   // Callback function when monitor ends
-  void OnMonitorEnd(PCCMonitor pcc_monitor, const RttStats* rtt_stats, MonitorNumber current_monitor, MonitorNumber end_monitor);
+  void OnMonitorEnd(PCCMonitor pcc_monitor,
+                    const RttStats* rtt_stats,
+                    MonitorNumber current_monitor,
+                    MonitorNumber end_monitor);
 
   // Get current rate
   double GetCurrentRate();
