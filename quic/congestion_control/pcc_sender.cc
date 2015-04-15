@@ -283,8 +283,9 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
                               MonitorNumber current_monitor,
                               MonitorNumber end_monitor) {
 
-  double total = GetBytesSum(pcc_monitor.packet_vector);
-  double loss = GetBytesSum(pcc_monitor.packet_vector);
+  double total = 0;
+  double loss = 0;
+  GetBytesSum(pcc_monitor.packet_vector, total, loss);
 
   int64 time = 
       pcc_monitor.end_transmission_time.Subtract(pcc_monitor.start_time).ToMicroseconds();
@@ -405,14 +406,17 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
   }
 }
 
-QuicByteCount PCCUtility::GetBytesSum(std::vector<PacketInfo> packet_vector) {
-  QuicByteCount sum = 0;
+void PCCUtility::GetBytesSum(std::vector<PacketInfo> packet_vector,
+                                      double& total,
+                                      double& lost) {
   for (std::vector<PacketInfo>::iterator it = packet_vector.begin();
       it != packet_vector.end(); ++it) {
-    sum += it->bytes;
-  }
+    total += it->bytes;
 
-  return sum;
+    if (it->state == LOST){
+      lost += it->bytes;
+    }
+  }
 }
 
 double PCCUtility::GetCurrentRate(){

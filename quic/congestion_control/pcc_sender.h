@@ -114,7 +114,9 @@ class PCCUtility {
   int change_direction_;
   int change_intense_;
 
-  QuicByteCount GetBytesSum(std::vector<PacketInfo> packet_vector);
+  void GetBytesSum(std::vector<PacketInfo> packet_vector,
+                                      double& total,
+                                      double& lost);
 };
 
 class RttStats;
