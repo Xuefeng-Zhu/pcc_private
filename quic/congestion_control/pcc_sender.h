@@ -1,7 +1,7 @@
 #ifndef NET_QUIC_CONGESTION_CONTROL_PCC_SENDER_H_
 #define NET_QUIC_CONGESTION_CONTROL_PCC_SENDER_H_
 
-# include <map>
+# include <vector>
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
@@ -20,27 +20,33 @@ namespace net {
 
 typedef int MonitorNumber;
 
-enum State {
+enum MonitorState {
   SENDING,
   WAITING,
   FINISHED
 };
 
+enum PacketState {
+  UNKNOWN,
+  ACK,
+  LOST
+};
+
 struct PacketInfo {
   QuicTime sent_time;
   QuicByteCount bytes;
+  PacketState state; 
 
   PacketInfo()
   : sent_time(QuicTime::Zero()),
-    bytes(0){
+    bytes(0),
+    state(UNKNOWN){
 
     }
-
-  // ~PacketInfo();
 };
 
 struct PCCMonitor {
-  State state;
+  MonitorState state;
 
   // time statics  
   QuicTime start_time;
@@ -48,9 +54,9 @@ struct PCCMonitor {
   QuicTime end_transmission_time;
 
   // packet statics
-  std::map<QuicPacketSequenceNumber , PacketInfo> total_packet_map;
-  std::map<QuicPacketSequenceNumber , PacketInfo> ack_packet_map;
-  std::map<QuicPacketSequenceNumber , PacketInfo> lost_packet_map;
+  QuicPacketSequenceNumber start_seq_num;
+  QuicPacketSequenceNumber end_seq_num;
+  std::vector<PacketInfo> packet_vector;
 
   PCCMonitor();
   ~PCCMonitor();
@@ -75,6 +81,9 @@ class PCCUtility {
 
   // Callback function when monitor ends
   void OnMonitorEnd(PCCMonitor pcc_monitor, const RttStats* rtt_stats, MonitorNumber current_monitor, MonitorNumber end_monitor);
+
+  // Get current rate
+  double GetCurrentRate();
 
  private:
   double current_rate_;
@@ -102,7 +111,7 @@ class PCCUtility {
   int change_direction_;
   int change_intense_;
 
-  QuicByteCount GetBytesSum(std::map<QuicPacketSequenceNumber , PacketInfo> packet_map);
+  QuicByteCount GetBytesSum(std::vector<PacketInfo> packet_vector);
 };
 
 class RttStats;
@@ -153,18 +162,18 @@ class NET_EXPORT_PRIVATE PCCSender : public SendAlgorithmInterface {
   QuicTime current_monitor_end_time_;
 
   PCCMonitor monitors_[NUM_MONITOR];
-  std::map<QuicPacketSequenceNumber, MonitorNumber> seq_monitor_map_;
-  std::map<QuicPacketSequenceNumber, MonitorNumber> end_seq_monitor_map_;
-
   PCCUtility pcc_utility_;
   const RttStats* rtt_stats_;
+  
+  QuicTime ideal_next_packet_send_time_;
 
   // private PCC functions
   // Start a new monitor
   void StartMonitor(QuicTime sent_time);
   // End previous monitor
-  void EndMonitor(QuicPacketSequenceNumber sequence_number);
-
+  void EndMonitor(MonitorNumber monitor_num);
+  // Get the monitor corresponding to the sequence number
+  MonitorNumber GetMonitor(QuicPacketSequenceNumber sequence_number);
 
   DISALLOW_COPY_AND_ASSIGN(PCCSender);
 };
