@@ -25,9 +25,8 @@
 
 #include "base/files/file_path.h"
 #include "base/strings/string_util.h"
-#include "net/base/filename_util_unsafe.h"
+#include "base/values.h"
 #include "net/base/io_buffer.h"
-#include "net/base/mime_util.h"
 #include "net/base/sdch_net_log_params.h"
 #include "net/filter/gzip_filter.h"
 #include "net/filter/sdch_filter.h"
@@ -48,9 +47,6 @@ const char kSdch[]         = "sdch";
 // more information, see Firefox's nsHttpChannel::ProcessNormal.
 
 // Mime types:
-const char kApplicationXGzip[]     = "application/x-gzip";
-const char kApplicationGzip[]      = "application/gzip";
-const char kApplicationXGunzip[]   = "application/x-gunzip";
 const char kTextHtml[]             = "text/html";
 
 // Buffer size allocated when de-compressing data.
@@ -188,12 +184,12 @@ bool Filter::FlushStreamBuffer(int stream_data_len) {
 Filter::FilterType Filter::ConvertEncodingToType(
     const std::string& filter_type) {
   FilterType type_id;
-  if (LowerCaseEqualsASCII(filter_type, kDeflate)) {
+  if (base::LowerCaseEqualsASCII(filter_type, kDeflate)) {
     type_id = FILTER_TYPE_DEFLATE;
-  } else if (LowerCaseEqualsASCII(filter_type, kGZip) ||
-             LowerCaseEqualsASCII(filter_type, kXGZip)) {
+  } else if (base::LowerCaseEqualsASCII(filter_type, kGZip) ||
+             base::LowerCaseEqualsASCII(filter_type, kXGZip)) {
     type_id = FILTER_TYPE_GZIP;
-  } else if (LowerCaseEqualsASCII(filter_type, kSdch)) {
+  } else if (base::LowerCaseEqualsASCII(filter_type, kSdch)) {
     type_id = FILTER_TYPE_SDCH;
   } else {
     // Note we also consider "identity" and "uncompressed" UNSUPPORTED as
@@ -210,50 +206,6 @@ void Filter::FixupEncodingTypes(
   std::string mime_type;
   bool success = filter_context.GetMimeType(&mime_type);
   DCHECK(success || mime_type.empty());
-
-  if ((1 == encoding_types->size()) &&
-      (FILTER_TYPE_GZIP == encoding_types->front())) {
-    if (LowerCaseEqualsASCII(mime_type, kApplicationXGzip) ||
-        LowerCaseEqualsASCII(mime_type, kApplicationGzip) ||
-        LowerCaseEqualsASCII(mime_type, kApplicationXGunzip))
-      // The server has told us that it sent us gziped content with a gzip
-      // content encoding. Sadly, Apache mistakenly sets these headers for all
-      // .gz files. We match Firefox's nsHttpChannel::ProcessNormal and ignore
-      // the Content-Encoding here.
-      encoding_types->clear();
-
-    GURL url;
-    std::string disposition;
-    success = filter_context.GetURL(&url);
-    DCHECK(success);
-    filter_context.GetContentDisposition(&disposition);
-    // Don't supply a MIME type here, since that may cause disk IO.
-    base::FilePath::StringType extension =
-        GenerateFileExtensionUnsafe(url, disposition, "UTF-8", "", "", "");
-
-    if (filter_context.IsDownload()) {
-      // We don't want to decompress gzipped files when the user explicitly
-      // asks to download them.
-      // For the case of svgz files, we use the extension to distinguish
-      // between svgz files and svg files compressed with gzip by the server.
-      // When viewing a .svgz file, we need to uncompress it, but we don't
-      // want to do that when downloading.
-      // See Firefox's nonDecodableExtensions in nsExternalHelperAppService.cpp
-      if (EndsWith(extension, FILE_PATH_LITERAL(".gz"), false) ||
-          LowerCaseEqualsASCII(extension, ".tgz") ||
-          LowerCaseEqualsASCII(extension, ".svgz"))
-        encoding_types->clear();
-    } else {
-      // When the user does not explicitly ask to download a file, if we get a
-      // supported mime type, then we attempt to decompress in order to view it.
-      // However, if it's not a supported mime type, then we will attempt to
-      // download it, and in that case, don't decompress .gz/.tgz files.
-      if ((EndsWith(extension, FILE_PATH_LITERAL(".gz"), false) ||
-           LowerCaseEqualsASCII(extension, ".tgz")) &&
-          !IsSupportedMimeType(mime_type))
-        encoding_types->clear();
-    }
-  }
 
   // If the request was for SDCH content, then we might need additional fixups.
   if (!filter_context.SdchDictionariesAdvertised()) {
@@ -315,7 +267,8 @@ void Filter::FixupEncodingTypes(
   // supported server side on paths that only send HTML content, this mode has
   // never surfaced in the wild (and is unlikely to).
   // We will gather a lot of stats as we perform the fixups
-  if (StartsWithASCII(mime_type, kTextHtml, false)) {
+  if (base::StartsWith(mime_type, kTextHtml,
+                       base::CompareCase::INSENSITIVE_ASCII)) {
     // Suspicious case: Advertised dictionary, but server didn't use sdch, and
     // we're HTML tagged.
     if (encoding_types->empty()) {
@@ -426,8 +379,7 @@ Filter* Filter::PrependNewFilter(FilterType type_id,
       break;
     case FILTER_TYPE_SDCH:
     case FILTER_TYPE_SDCH_POSSIBLE:
-      if (filter_context.GetURLRequestContext()->sdch_manager() &&
-          SdchManager::sdch_enabled()) {
+      if (filter_context.GetURLRequestContext()->sdch_manager()) {
         first_filter.reset(
             InitSdchFilter(type_id, filter_context, buffer_size));
       }

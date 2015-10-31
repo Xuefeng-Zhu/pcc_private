@@ -10,25 +10,26 @@
 
 namespace net {
 
-base::Value* NetLogSdchResourceProblemCallback(SdchProblemCode problem,
-                                               NetLog::LogLevel log_level) {
-  base::DictionaryValue* dict = new base::DictionaryValue();
+scoped_ptr<base::Value> NetLogSdchResourceProblemCallback(
+    SdchProblemCode problem,
+    NetLogCaptureMode capture_mode) {
+  scoped_ptr<base::DictionaryValue> dict(new base::DictionaryValue());
   dict->SetInteger("sdch_problem_code", problem);
   dict->SetInteger("net_error", ERR_FAILED);
-  return dict;
+  return dict.Pass();
 }
 
-base::Value* NetLogSdchDictionaryFetchProblemCallback(
+scoped_ptr<base::Value> NetLogSdchDictionaryFetchProblemCallback(
     SdchProblemCode problem,
     const GURL& url,
     bool is_error,
-    NetLog::LogLevel log_level) {
-  base::DictionaryValue* dict = new base::DictionaryValue();
+    NetLogCaptureMode capture_mode) {
+  scoped_ptr<base::DictionaryValue> dict(new base::DictionaryValue());
   dict->SetInteger("sdch_problem_code", problem);
   dict->SetString("dictionary_url", url.spec());
   if (is_error)
     dict->SetInteger("net_error", ERR_FAILED);
-  return dict;
+  return dict.Pass();
 }
 
 }  // namespace net

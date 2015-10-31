@@ -4,6 +4,8 @@
 
 #include "net/quic/congestion_control/pacing_sender.h"
 
+using std::min;
+
 namespace net {
 
 PacingSender::PacingSender(SendAlgorithmInterface* sender,
@@ -21,19 +23,23 @@ PacingSender::PacingSender(SendAlgorithmInterface* sender,
 PacingSender::~PacingSender() {}
 
 void PacingSender::SetFromConfig(const QuicConfig& config,
-                                 bool is_server,
-                                 bool using_pacing) {
-  DCHECK(using_pacing);
-  sender_->SetFromConfig(config, is_server, using_pacing);
+                                 Perspective perspective) {
+  sender_->SetFromConfig(config, perspective);
 }
 
-bool PacingSender::ResumeConnectionState(
-    const CachedNetworkParameters& cached_network_params) {
-  return sender_->ResumeConnectionState(cached_network_params);
+void PacingSender::ResumeConnectionState(
+    const CachedNetworkParameters& cached_network_params,
+    bool max_bandwidth_resumption) {
+  sender_->ResumeConnectionState(cached_network_params,
+                                 max_bandwidth_resumption);
 }
 
 void PacingSender::SetNumEmulatedConnections(int num_connections) {
   sender_->SetNumEmulatedConnections(num_connections);
+}
+
+void PacingSender::SetMaxCongestionWindow(QuicByteCount max_congestion_window) {
+  sender_->SetMaxCongestionWindow(max_congestion_window);
 }
 
 void PacingSender::OnCongestionEvent(bool rtt_updated,
@@ -47,18 +53,23 @@ void PacingSender::OnCongestionEvent(bool rtt_updated,
 bool PacingSender::OnPacketSent(
     QuicTime sent_time,
     QuicByteCount bytes_in_flight,
-    QuicPacketSequenceNumber sequence_number,
+    QuicPacketNumber packet_number,
     QuicByteCount bytes,
     HasRetransmittableData has_retransmittable_data) {
   const bool in_flight =
-      sender_->OnPacketSent(sent_time, bytes_in_flight, sequence_number,
-                            bytes, has_retransmittable_data);
+      sender_->OnPacketSent(sent_time, bytes_in_flight, packet_number, bytes,
+                            has_retransmittable_data);
   if (has_retransmittable_data != HAS_RETRANSMITTABLE_DATA) {
     return in_flight;
   }
-  if (bytes_in_flight == 0) {
-    // Add more burst tokens anytime the connection is leaving quiescence.
-    burst_tokens_ = initial_packet_burst_;
+  // If in recovery, the connection is not coming out of quiescence.
+  if (bytes_in_flight == 0 && !sender_->InRecovery()) {
+    // Add more burst tokens anytime the connection is leaving quiescence, but
+    // limit it to the equivalent of a single bulk write, not exceeding the
+    // current CWND in packets.
+    burst_tokens_ = min(
+        initial_packet_burst_,
+        static_cast<uint32>(sender_->GetCongestionWindow() / kDefaultTCPMSS));
   }
   if (burst_tokens_ > 0) {
     --burst_tokens_;
@@ -99,10 +110,6 @@ bool PacingSender::OnPacketSent(
 
 void PacingSender::OnRetransmissionTimeout(bool packets_retransmitted) {
   sender_->OnRetransmissionTimeout(packets_retransmitted);
-}
-
-void PacingSender::RevertRetransmissionTimeout() {
-  sender_->RevertRetransmissionTimeout();
 }
 
 QuicTime::Delta PacingSender::TimeUntilSend(
@@ -146,10 +153,6 @@ QuicBandwidth PacingSender::PacingRate() const {
 
 QuicBandwidth PacingSender::BandwidthEstimate() const {
   return sender_->BandwidthEstimate();
-}
-
-bool PacingSender::HasReliableBandwidthEstimate() const {
-  return sender_->HasReliableBandwidthEstimate();
 }
 
 QuicTime::Delta PacingSender::RetransmissionDelay() const {

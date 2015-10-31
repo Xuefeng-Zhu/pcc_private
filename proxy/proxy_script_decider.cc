@@ -9,8 +9,7 @@
 #include "base/compiler_specific.h"
 #include "base/format_macros.h"
 #include "base/logging.h"
-#include "base/metrics/histogram.h"
-#include "base/profiler/scoped_tracker.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
@@ -54,10 +53,10 @@ const char kWpadUrl[] = "http://wpad/wpad.dat";
 const int kQuickCheckDelayMs = 1000;
 };
 
-base::Value* ProxyScriptDecider::PacSource::NetLogCallback(
+scoped_ptr<base::Value> ProxyScriptDecider::PacSource::NetLogCallback(
     const GURL* effective_pac_url,
-    NetLog::LogLevel /* log_level */) const {
-  base::DictionaryValue* dict = new base::DictionaryValue();
+    NetLogCaptureMode /* capture_mode */) const {
+  scoped_ptr<base::DictionaryValue> dict(new base::DictionaryValue());
   std::string source;
   switch (type) {
     case PacSource::WPAD_DHCP:
@@ -73,7 +72,7 @@ base::Value* ProxyScriptDecider::PacSource::NetLogCallback(
       break;
   }
   dict->SetString("source", source);
-  return dict;
+  return dict.Pass();
 }
 
 ProxyScriptDecider::ProxyScriptDecider(
@@ -139,10 +138,10 @@ const ProxyConfig& ProxyScriptDecider::effective_config() const {
   return effective_config_;
 }
 
-// TODO(eroman): Return a const-pointer.
-ProxyResolverScriptData* ProxyScriptDecider::script_data() const {
+const scoped_refptr<ProxyResolverScriptData>&
+ProxyScriptDecider::script_data() const {
   DCHECK_EQ(STATE_NONE, next_state_);
-  return script_data_.get();
+  return script_data_;
 }
 
 // Initialize the fallback rules.
@@ -163,11 +162,6 @@ ProxyScriptDecider::PacSourceList ProxyScriptDecider::
 }
 
 void ProxyScriptDecider::OnIOCompletion(int result) {
-  // TODO(vadimt): Remove ScopedTracker below once crbug.com/436634 is fixed.
-  tracked_objects::ScopedTracker tracking_profile(
-      FROM_HERE_WITH_EXPLICIT_FUNCTION(
-          "436634 ProxyScriptDecider::OnIOCompletion"));
-
   DCHECK_NE(STATE_NONE, next_state_);
   int rv = DoLoop(result);
   if (rv != ERR_IO_PENDING) {
@@ -472,7 +466,6 @@ void ProxyScriptDecider::Cancel() {
       proxy_script_fetcher_->Cancel();
       break;
     default:
-      NOTREACHED();
       break;
   }
 

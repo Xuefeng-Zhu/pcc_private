@@ -31,12 +31,14 @@
 #include "testing/platform_test.h"
 
 using base::StringPiece;
-using net::tools::QuicInMemoryCache;
-using net::tools::QuicServer;
-using net::tools::test::QuicInMemoryCachePeer;
-using net::tools::test::ServerThread;
 
 namespace net {
+
+using tools::QuicInMemoryCache;
+using tools::QuicServer;
+using tools::test::QuicInMemoryCachePeer;
+using tools::test::ServerThread;
+
 namespace test {
 
 namespace {
@@ -127,17 +129,17 @@ class QuicEndToEndTest : public PlatformTest {
 
   // Starts the QUIC server listening on a random port.
   void StartServer() {
-    net::IPAddressNumber ip;
-    CHECK(net::ParseIPLiteralToNumber("127.0.0.1", &ip));
+    IPAddressNumber ip;
+    CHECK(ParseIPLiteralToNumber("127.0.0.1", &ip));
     server_address_ = IPEndPoint(ip, 0);
     server_config_.SetInitialStreamFlowControlWindowToSend(
         kInitialStreamFlowControlWindowForTest);
     server_config_.SetInitialSessionFlowControlWindowToSend(
         kInitialSessionFlowControlWindowForTest);
     server_thread_.reset(new ServerThread(
-         new QuicServer(server_config_, QuicSupportedVersions()),
-         server_address_,
-         strike_register_no_startup_period_));
+        new QuicServer(server_config_, QuicSupportedVersions()),
+        /*is_secure=*/true, server_address_,
+        strike_register_no_startup_period_));
     server_thread_->Initialize();
     server_address_ = IPEndPoint(server_address_.address(),
                                  server_thread_->GetPort());
@@ -158,14 +160,12 @@ class QuicEndToEndTest : public PlatformTest {
 
   // Adds an entry to the cache used by the QUIC server to serve
   // responses.
-  void AddToCache(const StringPiece& method,
-                  const StringPiece& path,
-                  const StringPiece& version,
-                  const StringPiece& response_code,
-                  const StringPiece& response_detail,
-                  const StringPiece& body) {
+  void AddToCache(StringPiece path,
+                  int response_code,
+                  StringPiece response_detail,
+                  StringPiece body) {
     QuicInMemoryCache::GetInstance()->AddSimpleResponse(
-        method, path, version, response_code, response_detail, body);
+        "www.google.com", path, response_code, response_detail, body);
   }
 
   // Populates |request_body_| with |length_| ASCII bytes.
@@ -227,9 +227,7 @@ class QuicEndToEndTest : public PlatformTest {
 TEST_F(QuicEndToEndTest, LargeGetWithNoPacketLoss) {
   std::string response(10 * 1024, 'x');
 
-  AddToCache("GET", request_.url.spec(),
-             "HTTP/1.1", "200", "OK",
-             response);
+  AddToCache(request_.url.PathForRequest(), 200, "OK", response);
 
   TestTransactionConsumer consumer(DEFAULT_PRIORITY,
                                    transaction_factory_.get());
@@ -245,9 +243,7 @@ TEST_F(QuicEndToEndTest, LargeGetWithNoPacketLoss) {
 TEST_F(QuicEndToEndTest, DISABLED_LargePostWithNoPacketLoss) {
   InitializePostRequest(10 * 1024 * 1024);
 
-  AddToCache("POST", request_.url.spec(),
-             "HTTP/1.1", "200", "OK",
-             kResponseBody);
+  AddToCache(request_.url.PathForRequest(), 200, "OK", kResponseBody);
 
   TestTransactionConsumer consumer(DEFAULT_PRIORITY,
                                    transaction_factory_.get());
@@ -264,9 +260,7 @@ TEST_F(QuicEndToEndTest, LargePostWithPacketLoss) {
   InitializePostRequest(1024 * 1024);
 
   const char kResponseBody[] = "some really big response body";
-  AddToCache("POST", request_.url.spec(),
-             "HTTP/1.1", "200", "OK",
-             kResponseBody);
+  AddToCache(request_.url.PathForRequest(), 200, "OK", kResponseBody);
 
   TestTransactionConsumer consumer(DEFAULT_PRIORITY,
                                    transaction_factory_.get());
@@ -278,13 +272,17 @@ TEST_F(QuicEndToEndTest, LargePostWithPacketLoss) {
   CheckResponse(consumer, "HTTP/1.1 200 OK", kResponseBody);
 }
 
-TEST_F(QuicEndToEndTest, UberTest) {
+// crbug.com/536845
+#if defined(THREAD_SANITIZER)
+#define MAYBE_UberTest DISABLED_UberTest
+#else
+#define MAYBE_UberTest UberTest
+#endif
+TEST_F(QuicEndToEndTest, MAYBE_UberTest) {
   // FLAGS_fake_packet_loss_percentage = 30;
 
   const char kResponseBody[] = "some really big response body";
-  AddToCache("GET", request_.url.spec(),
-             "HTTP/1.1", "200", "OK",
-             kResponseBody);
+  AddToCache(request_.url.PathForRequest(), 200, "OK", kResponseBody);
 
   std::vector<TestTransactionConsumer*> consumers;
   size_t num_requests = 100;

@@ -108,7 +108,7 @@ string LoadTestCert(const string& file_name) {
 
 }  // namespace
 
-// TODO(rtenneti): Enable testing of ProofVerifier.
+// TODO(rtenneti): Enable testing of ProofVerifier. See http://crbug.com/514468.
 TEST(ProofTest, DISABLED_Verify) {
   scoped_ptr<ProofSource> source(CryptoTestUtils::ProofSourceForTesting());
   scoped_ptr<ProofVerifier> verifier(
@@ -119,7 +119,7 @@ TEST(ProofTest, DISABLED_Verify) {
   const vector<string>* certs;
   const vector<string>* first_certs;
   string error_details, signature, first_signature;
-  IPEndPoint server_ip;
+  IPAddressNumber server_ip;
 
   ASSERT_TRUE(source->GetProof(server_ip, hostname, server_config,
                                false /* no ECDSA */, &first_certs,

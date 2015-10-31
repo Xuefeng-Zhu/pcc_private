@@ -6,7 +6,7 @@
 
 #include "base/files/file_util.h"
 #include "base/logging.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 
 using base::StringPiece;
@@ -131,7 +131,6 @@ void ParseHostsWithCommaMode(const std::string& contents,
                              DnsHosts* dns_hosts,
                              ParseHostsCommaMode comma_mode) {
   CHECK(dns_hosts);
-  DnsHosts& hosts = *dns_hosts;
 
   StringPiece ip_text;
   IPAddressNumber ip;
@@ -155,10 +154,10 @@ void ParseHostsWithCommaMode(const std::string& contents,
       }
     } else {
       DnsHostsKey key(parser.token().as_string(), family);
-      base::StringToLowerASCII(&key.first);
-      IPAddressNumber& mapped_ip = hosts[key];
-      if (mapped_ip.empty())
-        mapped_ip = ip;
+      key.first = base::ToLowerASCII(key.first);
+      IPAddressNumber* mapped_ip = &(*dns_hosts)[key];
+      if (mapped_ip->empty())
+        *mapped_ip = ip;
       // else ignore this entry (first hit counts)
     }
   }

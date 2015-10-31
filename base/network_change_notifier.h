@@ -5,6 +5,8 @@
 #ifndef NET_BASE_NETWORK_CHANGE_NOTIFIER_H_
 #define NET_BASE_NETWORK_CHANGE_NOTIFIER_H_
 
+#include <vector>
+
 #include "base/basictypes.h"
 #include "base/observer_list_threadsafe.h"
 #include "base/time/time.h"
@@ -17,6 +19,8 @@ namespace net {
 struct DnsConfig;
 class HistogramWatcher;
 class NetworkChangeNotifierFactory;
+struct NetworkInterface;
+typedef std::vector<NetworkInterface> NetworkInterfaceList;
 class URLRequest;
 
 #if defined(OS_LINUX)
@@ -37,6 +41,9 @@ class NET_EXPORT NetworkChangeNotifier {
   //
   // A Java counterpart will be generated for this enum.
   // GENERATED_JAVA_ENUM_PACKAGE: org.chromium.net
+  //
+  // New enum values should only be added to the end of the enum and no values
+  // should be modified or reused, as this is reported via UMA.
   enum ConnectionType {
     CONNECTION_UNKNOWN = 0,  // A connection exists, but its type is unknown.
                              // Also used as a default value.
@@ -128,6 +135,9 @@ class NET_EXPORT NetworkChangeNotifier {
     // Will be called when the DNS settings of the system may have changed.
     // Use GetDnsConfig to obtain the current settings.
     virtual void OnDNSChanged() = 0;
+    // Will be called when DNS settings of the system have been loaded.
+    // Use GetDnsConfig to obtain the current settings.
+    virtual void OnInitialDNSConfigRead();
 
    protected:
     DNSObserver() {}
@@ -176,14 +186,13 @@ class NET_EXPORT NetworkChangeNotifier {
 
   class NET_EXPORT MaxBandwidthObserver {
    public:
-    // Will be called when a change occurs to the network's maximum bandwidth as
-    // defined in http://w3c.github.io/netinfo/. Generally this will only be
-    // called on bandwidth changing network connection/disconnection events.
-    // Some platforms may call it more frequently, such as when WiFi signal
-    // strength changes.
-    // TODO(jkarlin): This is currently only implemented for Android. Implement
-    // on every platform.
-    virtual void OnMaxBandwidthChanged(double max_bandwidth_mbps) = 0;
+    // Called when a change occurs to the network's maximum bandwidth as
+    // defined in http://w3c.github.io/netinfo/. Also called on type change,
+    // even if the maximum bandwidth doesn't change. See the documentation of
+    // GetMaxBanwidthAndConnectionType for what to expect for the values of
+    // |max_bandwidth_mbps|.
+    virtual void OnMaxBandwidthChanged(double max_bandwidth_mbps,
+                                       ConnectionType type) = 0;
 
    protected:
     MaxBandwidthObserver() {}
@@ -224,13 +233,25 @@ class NET_EXPORT NetworkChangeNotifier {
   // the internet, the connection type is CONNECTION_WIFI.
   static ConnectionType GetConnectionType();
 
-  // Returns a theoretical upper limit on download bandwidth, potentially based
-  // on underlying connection type, signal strength, or some other signal. The
-  // default mapping of connection type to maximum bandwidth is provided in the
-  // NetInfo spec: http://w3c.github.io/netinfo/. Host-specific application
-  // permissions may be required, please see host-specific declaration for more
-  // information.
-  static double GetMaxBandwidth();
+  // Sets |max_bandwidth_mbps| to a theoretical upper limit on download
+  // bandwidth, potentially based on underlying connection type, signal
+  // strength, or some other signal. If the network subtype is unknown then
+  // |max_bandwidth_mbps| is set to +Infinity and if there is no network
+  // connection then it is set to 0.0. The circumstances in which a more
+  // specific value is given are: when an Android device is connected to a
+  // cellular or WiFi network, and when a ChromeOS device is connected to a
+  // cellular network. See the NetInfo spec for the mapping of
+  // specific subtypes to bandwidth values: http://w3c.github.io/netinfo/.
+  // |connection_type| is set to the current active default network's connection
+  // type.
+  static void GetMaxBandwidthAndConnectionType(double* max_bandwidth_mbps,
+                                               ConnectionType* connection_type);
+
+  // Returns a theoretical upper limit (in Mbps) on download bandwidth given a
+  // connection subtype. The mapping of connection type to maximum bandwidth is
+  // provided in the NetInfo spec: http://w3c.github.io/netinfo/.
+  // TODO(jkarlin): Rename to GetMaxBandwidthMbpsForConnectionSubtype.
+  static double GetMaxBandwidthForConnectionSubtype(ConnectionSubtype subtype);
 
   // Retrieve the last read DnsConfig. This could be expensive if the system has
   // a large HOSTS file.
@@ -257,6 +278,13 @@ class NET_EXPORT NetworkChangeNotifier {
   // IsConnectionCellular(GetConnectionType()) returns false even if the
   // current connection is cellular.
   static bool IsConnectionCellular(ConnectionType type);
+
+  // Gets the current connection type based on |interfaces|. Returns
+  // CONNECTION_NONE if there are no interfaces, CONNECTION_UNKNOWN if two
+  // interfaces have different connection types or the connection type of all
+  // interfaces if they have the same interface type.
+  static ConnectionType ConnectionTypeFromInterfaceList(
+      const NetworkInterfaceList& interfaces);
 
   // Like Create(), but for use in tests.  The mock object doesn't monitor any
   // events, it merely rebroadcasts notifications when requested.
@@ -291,10 +319,15 @@ class NET_EXPORT NetworkChangeNotifier {
   static void NotifyObserversOfConnectionTypeChangeForTests(
       ConnectionType type);
   static void NotifyObserversOfNetworkChangeForTests(ConnectionType type);
+  static void NotifyObserversOfInitialDNSConfigReadForTests();
+  static void NotifyObserversOfMaxBandwidthChangeForTests(
+      double max_bandwidth_mbps,
+      ConnectionType type);
 
   // Enable or disable notifications from the host. After setting to true, be
   // sure to pump the RunLoop until idle to finish any preexisting
-  // notifications.
+  // notifications. To use this, it must must be called before a
+  // NetworkChangeNotifier is created.
   static void SetTestNotificationsOnly(bool test_only);
 
   // Return a string equivalent to |type|.
@@ -373,12 +406,9 @@ class NET_EXPORT NetworkChangeNotifier {
   // See the description of NetworkChangeNotifier::GetMaxBandwidth().
   // Implementations must be thread-safe. Implementations must also be
   // cheap as it is called often.
-  virtual double GetCurrentMaxBandwidth() const;
-
-  // Returns a theoretical upper limit on download bandwidth given a connection
-  // subtype. The mapping of connection type to maximum bandwidth is provided in
-  // the NetInfo spec: http://w3c.github.io/netinfo/.
-  static double GetMaxBandwidthForConnectionSubtype(ConnectionSubtype subtype);
+  virtual void GetCurrentMaxBandwidthAndConnectionType(
+      double* max_bandwidth_mbps,
+      ConnectionType* connection_type) const;
 
   // Broadcasts a notification to all registered observers.  Note that this
   // happens asynchronously, even for observers on the current thread, even in
@@ -386,11 +416,16 @@ class NET_EXPORT NetworkChangeNotifier {
   static void NotifyObserversOfIPAddressChange();
   static void NotifyObserversOfConnectionTypeChange();
   static void NotifyObserversOfDNSChange();
+  static void NotifyObserversOfInitialDNSConfigRead();
   static void NotifyObserversOfNetworkChange(ConnectionType type);
-  static void NotifyObserversOfMaxBandwidthChange(double max_bandwidth_mbps);
+  static void NotifyObserversOfMaxBandwidthChange(double max_bandwidth_mbps,
+                                                  ConnectionType type);
 
-  // Stores |config| in NetworkState and notifies observers.
+  // Stores |config| in NetworkState and notifies OnDNSChanged observers.
   static void SetDnsConfig(const DnsConfig& config);
+  // Stores |config| in NetworkState and notifies OnInitialDNSConfigRead
+  // observers.
+  static void SetInitialDnsConfig(const DnsConfig& config);
 
  private:
   friend class HostResolverImplDnsTest;
@@ -404,18 +439,20 @@ class NET_EXPORT NetworkChangeNotifier {
   void NotifyObserversOfIPAddressChangeImpl();
   void NotifyObserversOfConnectionTypeChangeImpl(ConnectionType type);
   void NotifyObserversOfDNSChangeImpl();
+  void NotifyObserversOfInitialDNSConfigReadImpl();
   void NotifyObserversOfNetworkChangeImpl(ConnectionType type);
-  void NotifyObserversOfMaxBandwidthChangeImpl(double max_bandwidth_mbps);
+  void NotifyObserversOfMaxBandwidthChangeImpl(double max_bandwidth_mbps,
+                                               ConnectionType type);
 
-  const scoped_refptr<ObserverListThreadSafe<IPAddressObserver>>
+  const scoped_refptr<base::ObserverListThreadSafe<IPAddressObserver>>
       ip_address_observer_list_;
-  const scoped_refptr<ObserverListThreadSafe<ConnectionTypeObserver>>
+  const scoped_refptr<base::ObserverListThreadSafe<ConnectionTypeObserver>>
       connection_type_observer_list_;
-  const scoped_refptr<ObserverListThreadSafe<DNSObserver>>
+  const scoped_refptr<base::ObserverListThreadSafe<DNSObserver>>
       resolver_state_observer_list_;
-  const scoped_refptr<ObserverListThreadSafe<NetworkChangeObserver>>
+  const scoped_refptr<base::ObserverListThreadSafe<NetworkChangeObserver>>
       network_change_observer_list_;
-  const scoped_refptr<ObserverListThreadSafe<MaxBandwidthObserver>>
+  const scoped_refptr<base::ObserverListThreadSafe<MaxBandwidthObserver>>
       max_bandwidth_observer_list_;
 
   // The current network state. Hosts DnsConfig, exposed via GetDnsConfig.
@@ -428,7 +465,7 @@ class NET_EXPORT NetworkChangeNotifier {
   scoped_ptr<NetworkChangeCalculator> network_change_calculator_;
 
   // Set true to disable non-test notifications (to prevent flakes in tests).
-  bool test_notifications_only_;
+  static bool test_notifications_only_;
 
   DISALLOW_COPY_AND_ASSIGN(NetworkChangeNotifier);
 };

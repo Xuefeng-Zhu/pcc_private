@@ -12,6 +12,7 @@
 #include "net/quic/crypto/quic_encrypter.h"
 #include "net/quic/crypto/quic_random.h"
 #include "net/quic/quic_time.h"
+#include "net/quic/quic_utils.h"
 #include "url/url_canon.h"
 
 using base::StringPiece;
@@ -104,7 +105,7 @@ bool CryptoUtils::DeriveKeys(StringPiece premaster_secret,
 
   crypto::HKDF hkdf(premaster_secret, nonce, hkdf_input, key_bytes,
                     nonce_prefix_bytes, subkey_secret_bytes);
-  if (perspective == SERVER) {
+  if (perspective == Perspective::IS_SERVER) {
     if (!crypters->encrypter->SetKey(hkdf.server_write_key()) ||
         !crypters->encrypter->SetNoncePrefix(hkdf.server_write_iv()) ||
         !crypters->decrypter->SetKey(hkdf.client_write_key()) ||
@@ -157,6 +158,11 @@ bool CryptoUtils::ExportKeyingMaterial(StringPiece subkey_secret,
                     0 /* no subkey secret */);
   hkdf.client_write_key().CopyToString(result);
   return true;
+}
+
+// static
+uint64 CryptoUtils::ComputeLeafCertHash(const std::string& cert) {
+  return QuicUtils::FNV1a_64_Hash(cert.data(), cert.size());
 }
 
 }  // namespace net

@@ -11,24 +11,27 @@
 #include "base/cancelable_callback.h"
 #include "base/command_line.h"
 #include "base/files/file_util.h"
+#include "base/location.h"
 #include "base/memory/scoped_ptr.h"
 #include "base/message_loop/message_loop.h"
+#include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "net/base/address_list.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
-#include "net/base/net_log.h"
 #include "net/base/net_util.h"
 #include "net/dns/dns_client.h"
 #include "net/dns/dns_config_service.h"
 #include "net/dns/dns_protocol.h"
 #include "net/dns/host_cache.h"
 #include "net/dns/host_resolver_impl.h"
+#include "net/log/net_log.h"
 #include "net/tools/gdig/file_net_log.h"
 
 #if defined(OS_MACOSX)
@@ -130,15 +133,15 @@ bool LoadReplayLog(const base::FilePath& file_path, ReplayLog* replay_log) {
   std::string replay_log_contents;
   base::RemoveChars(original_replay_log_contents, "\r", &replay_log_contents);
 
-  std::vector<std::string> lines;
-  base::SplitString(replay_log_contents, '\n', &lines);
+  std::vector<std::string> lines = base::SplitString(
+      replay_log_contents, "\n", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
   base::TimeDelta previous_delta;
   bool bad_parse = false;
   for (unsigned i = 0; i < lines.size(); ++i) {
     if (lines[i].empty())
       continue;
-    std::vector<std::string> time_and_name;
-    base::SplitString(lines[i], ' ', &time_and_name);
+    std::vector<std::string> time_and_name = base::SplitString(
+        lines[i], " ", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
     if (time_and_name.size() != 2) {
       fprintf(
           stderr,
@@ -246,7 +249,7 @@ GDig::GDig()
 
 GDig::~GDig() {
   if (log_)
-    log_->RemoveThreadSafeObserver(log_observer_.get());
+    log_->DeprecatedRemoveObserver(log_observer_.get());
 }
 
 GDig::Result GDig::Main(int argc, const char* argv[]) {
@@ -296,15 +299,17 @@ bool GDig::ParseCommandLine(int argc, const char* argv[]) {
 
   if (parsed_command_line.HasSwitch("net_log")) {
     std::string log_param = parsed_command_line.GetSwitchValueASCII("net_log");
-    NetLog::LogLevel level = NetLog::LOG_ALL_BUT_BYTES;
+    NetLogCaptureMode capture_mode =
+        NetLogCaptureMode::IncludeCookiesAndCredentials();
 
     if (log_param.length() > 0) {
-      std::map<std::string, NetLog::LogLevel> log_levels;
-      log_levels["all"] = NetLog::LOG_ALL;
-      log_levels["no_bytes"] = NetLog::LOG_ALL_BUT_BYTES;
+      std::map<std::string, NetLogCaptureMode> capture_modes;
+      capture_modes["all"] = NetLogCaptureMode::IncludeSocketBytes();
+      capture_modes["no_bytes"] =
+          NetLogCaptureMode::IncludeCookiesAndCredentials();
 
-      if (log_levels.find(log_param) != log_levels.end()) {
-        level = log_levels[log_param];
+      if (capture_modes.find(log_param) != capture_modes.end()) {
+        capture_mode = capture_modes[log_param];
       } else {
         fprintf(stderr, "Invalid net_log parameter\n");
         return false;
@@ -312,7 +317,7 @@ bool GDig::ParseCommandLine(int argc, const char* argv[]) {
     }
     log_.reset(new NetLog);
     log_observer_.reset(new FileNetLogObserver(stderr));
-    log_->AddThreadSafeObserver(log_observer_.get(), level);
+    log_->DeprecatedAddObserver(log_observer_.get(), capture_mode);
   }
 
   print_config_ = parsed_command_line.HasSwitch("print_config");
@@ -387,7 +392,7 @@ void GDig::Start() {
                                                base::Unretained(this)));
     timeout_closure_.Reset(base::Bind(&GDig::OnTimeout,
                                       base::Unretained(this)));
-    base::MessageLoop::current()->PostDelayedTask(
+    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
         FROM_HERE, timeout_closure_.callback(), config_timeout_);
   }
 }
@@ -443,9 +448,8 @@ void GDig::ReplayNextEntry() {
     const ReplayLogEntry& entry = replay_log_[replay_log_index_];
     if (time_since_start < entry.start_time) {
       // Delay call to next time and return.
-      base::MessageLoop::current()->PostDelayedTask(
-          FROM_HERE,
-          base::Bind(&GDig::ReplayNextEntry, base::Unretained(this)),
+      base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+          FROM_HERE, base::Bind(&GDig::ReplayNextEntry, base::Unretained(this)),
           entry.start_time - time_since_start);
       return;
     }

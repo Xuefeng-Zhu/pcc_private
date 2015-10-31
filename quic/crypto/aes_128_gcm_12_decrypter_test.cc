@@ -257,15 +257,20 @@ QuicData* DecryptWithNonce(Aes128Gcm12Decrypter* decrypter,
                            StringPiece nonce,
                            StringPiece associated_data,
                            StringPiece ciphertext) {
-  size_t plaintext_size = ciphertext.length();
-  scoped_ptr<char[]> plaintext(new char[plaintext_size]);
-
-  if (!decrypter->Decrypt(nonce, associated_data, ciphertext,
-                          reinterpret_cast<unsigned char*>(plaintext.get()),
-                          &plaintext_size)) {
+  QuicPacketNumber packet_number;
+  StringPiece nonce_prefix(nonce.data(), nonce.size() - sizeof(packet_number));
+  decrypter->SetNoncePrefix(nonce_prefix);
+  memcpy(&packet_number, nonce.data() + nonce_prefix.size(),
+         sizeof(packet_number));
+  scoped_ptr<char[]> output(new char[ciphertext.length()]);
+  size_t output_length = 0;
+  const bool success = decrypter->DecryptPacket(
+      packet_number, associated_data, ciphertext, output.get(), &output_length,
+      ciphertext.length());
+  if (!success) {
     return nullptr;
   }
-  return new QuicData(plaintext.release(), plaintext_size, true);
+  return new QuicData(output.release(), output_length, true);
 }
 
 TEST(Aes128Gcm12DecrypterTest, Decrypt) {

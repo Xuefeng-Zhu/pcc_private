@@ -6,7 +6,9 @@
 
 #include "base/callback_helpers.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/profiler/scoped_tracker.h"
+#include "base/time/time.h"
 #include "net/base/io_buffer.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
@@ -38,6 +40,7 @@ TCPClientSocket::TCPClientSocket(scoped_ptr<TCPSocket> connected_socket,
 }
 
 TCPClientSocket::~TCPClientSocket() {
+  Disconnect();
 }
 
 int TCPClientSocket::Bind(const IPEndPoint& address) {
@@ -63,10 +66,6 @@ int TCPClientSocket::Bind(const IPEndPoint& address) {
 }
 
 int TCPClientSocket::Connect(const CompletionCallback& callback) {
-  // TODO(vadimt): Remove ScopedTracker below once crbug.com/436634 is fixed.
-  tracked_objects::ScopedTracker tracking_profile(
-      FROM_HERE_WITH_EXPLICIT_FUNCTION("436634 TCPClientSocket::Connect"));
-
   DCHECK(!callback.is_null());
 
   // If connecting or already connected, then just return OK.
@@ -116,41 +115,40 @@ int TCPClientSocket::DoConnectLoop(int result) {
 }
 
 int TCPClientSocket::DoConnect() {
-  // TODO(vadimt): Remove ScopedTracker below once crbug.com/436634 is fixed.
-  tracked_objects::ScopedTracker tracking_profile1(
-      FROM_HERE_WITH_EXPLICIT_FUNCTION("436634 TCPClientSocket::DoConnect1"));
-
   DCHECK_GE(current_address_index_, 0);
   DCHECK_LT(current_address_index_, static_cast<int>(addresses_.size()));
 
   const IPEndPoint& endpoint = addresses_[current_address_index_];
 
-  if (previously_disconnected_) {
-    use_history_.Reset();
-    previously_disconnected_ = false;
-  }
+  {
+    // TODO(ricea): Remove ScopedTracker below once crbug.com/436634 is fixed.
+    tracked_objects::ScopedTracker tracking_profile(
+        FROM_HERE_WITH_EXPLICIT_FUNCTION("436634 TCPClientSocket::DoConnect"));
 
-  next_connect_state_ = CONNECT_STATE_CONNECT_COMPLETE;
+    if (previously_disconnected_) {
+      use_history_.Reset();
+      connection_attempts_.clear();
+      previously_disconnected_ = false;
+    }
 
-  if (socket_->IsValid()) {
-    DCHECK(bind_address_);
-  } else {
-    int result = OpenSocket(endpoint.GetFamily());
-    if (result != OK)
-      return result;
+    next_connect_state_ = CONNECT_STATE_CONNECT_COMPLETE;
 
-    if (bind_address_) {
-      result = socket_->Bind(*bind_address_);
-      if (result != OK) {
-        socket_->Close();
+    if (socket_->IsValid()) {
+      DCHECK(bind_address_);
+    } else {
+      int result = OpenSocket(endpoint.GetFamily());
+      if (result != OK)
         return result;
+
+      if (bind_address_) {
+        result = socket_->Bind(*bind_address_);
+        if (result != OK) {
+          socket_->Close();
+          return result;
+        }
       }
     }
   }
-
-  // TODO(vadimt): Remove ScopedTracker below once crbug.com/436634 is fixed.
-  tracked_objects::ScopedTracker tracking_profile2(
-      FROM_HERE_WITH_EXPLICIT_FUNCTION("436634 TCPClientSocket::DoConnect2"));
 
   // |socket_| is owned by this class and the callback won't be run once
   // |socket_| is gone. Therefore, it is safe to use base::Unretained() here.
@@ -160,15 +158,13 @@ int TCPClientSocket::DoConnect() {
 }
 
 int TCPClientSocket::DoConnectComplete(int result) {
-  // TODO(vadimt): Remove ScopedTracker below once crbug.com/436634 is fixed.
-  tracked_objects::ScopedTracker tracking_profile(
-      FROM_HERE_WITH_EXPLICIT_FUNCTION(
-          "436634 TCPClientSocket::DoConnectComplete"));
-
   if (result == OK) {
     use_history_.set_was_ever_connected();
     return OK;  // Done!
   }
+
+  connection_attempts_.push_back(
+      ConnectionAttempt(addresses_[current_address_index_], result));
 
   // Close whatever partially connected socket we currently have.
   DoDisconnect();
@@ -191,6 +187,7 @@ void TCPClientSocket::Disconnect() {
 }
 
 void TCPClientSocket::DoDisconnect() {
+  EmitTCPMetricsHistogramsOnDisconnect();
   // If connecting or already connected, record that the socket has been
   // disconnected.
   previously_disconnected_ = socket_->IsValid() && current_address_index_ >= 0;
@@ -307,6 +304,20 @@ bool TCPClientSocket::SetNoDelay(bool no_delay) {
   return socket_->SetNoDelay(no_delay);
 }
 
+void TCPClientSocket::GetConnectionAttempts(ConnectionAttempts* out) const {
+  *out = connection_attempts_;
+}
+
+void TCPClientSocket::ClearConnectionAttempts() {
+  connection_attempts_.clear();
+}
+
+void TCPClientSocket::AddConnectionAttempts(
+    const ConnectionAttempts& attempts) {
+  connection_attempts_.insert(connection_attempts_.begin(), attempts.begin(),
+                              attempts.end());
+}
+
 void TCPClientSocket::DidCompleteConnect(int result) {
   DCHECK_EQ(next_connect_state_, CONNECT_STATE_CONNECT_COMPLETE);
   DCHECK_NE(result, ERR_IO_PENDING);
@@ -324,10 +335,10 @@ void TCPClientSocket::DidCompleteReadWrite(const CompletionCallback& callback,
   if (result > 0)
     use_history_.set_was_used_to_convey_data();
 
-  // TODO(vadimt): Remove ScopedTracker below once crbug.com/418183 is fixed.
+  // TODO(pkasting): Remove ScopedTracker below once crbug.com/462780 is fixed.
   tracked_objects::ScopedTracker tracking_profile(
       FROM_HERE_WITH_EXPLICIT_FUNCTION(
-          "TCPClientSocket::DidCompleteReadWrite"));
+          "462780 TCPClientSocket::DidCompleteReadWrite"));
   callback.Run(result);
 }
 
@@ -341,6 +352,15 @@ int TCPClientSocket::OpenSocket(AddressFamily family) {
   socket_->SetDefaultOptionsForClient();
 
   return OK;
+}
+
+void TCPClientSocket::EmitTCPMetricsHistogramsOnDisconnect() {
+  base::TimeDelta rtt;
+  if (socket_->GetEstimatedRoundTripTime(&rtt)) {
+    UMA_HISTOGRAM_CUSTOM_TIMES("Net.TcpRtt.AtDisconnect", rtt,
+                               base::TimeDelta::FromMilliseconds(1),
+                               base::TimeDelta::FromMinutes(10), 100);
+  }
 }
 
 }  // namespace net

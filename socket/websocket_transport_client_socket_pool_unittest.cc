@@ -10,12 +10,13 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/callback.h"
+#include "base/location.h"
 #include "base/macros.h"
-#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
+#include "base/single_thread_task_runner.h"
 #include "base/strings/stringprintf.h"
+#include "base/thread_task_runner_handle.h"
 #include "base/time/time.h"
-#include "net/base/capturing_net_log.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/load_timing_info.h"
 #include "net/base/load_timing_info_test_util.h"
@@ -23,8 +24,8 @@
 #include "net/base/net_util.h"
 #include "net/base/test_completion_callback.h"
 #include "net/dns/mock_host_resolver.h"
+#include "net/log/test_net_log.h"
 #include "net/socket/client_socket_handle.h"
-#include "net/socket/client_socket_pool_histograms.h"
 #include "net/socket/socket_test_util.h"
 #include "net/socket/stream_socket.h"
 #include "net/socket/transport_client_socket_pool_test_util.h"
@@ -43,8 +44,8 @@ const RequestPriority kDefaultPriority = LOW;
 void RunLoopForTimePeriod(base::TimeDelta period) {
   base::RunLoop run_loop;
   base::Closure quit_closure(run_loop.QuitClosure());
-  base::MessageLoop::current()->PostDelayedTask(
-      FROM_HERE, quit_closure, period);
+  base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(FROM_HERE, quit_closure,
+                                                       period);
   run_loop.Run();
 }
 
@@ -57,12 +58,10 @@ class WebSocketTransportClientSocketPoolTest : public ::testing::Test {
             false,
             OnHostResolutionCallback(),
             TransportSocketParams::COMBINE_CONNECT_AND_WRITE_DEFAULT)),
-        histograms_(new ClientSocketPoolHistograms("TCPUnitTest")),
         host_resolver_(new MockHostResolver),
         client_socket_factory_(&net_log_),
         pool_(kMaxSockets,
               kMaxSocketsPerGroup,
-              histograms_.get(),
               host_resolver_.get(),
               &client_socket_factory_,
               NULL) {}
@@ -106,9 +105,8 @@ class WebSocketTransportClientSocketPoolTest : public ::testing::Test {
   ScopedVector<TestSocketRequest>* requests() { return test_base_.requests(); }
   size_t completion_count() const { return test_base_.completion_count(); }
 
-  CapturingNetLog net_log_;
+  TestNetLog net_log_;
   scoped_refptr<TransportSocketParams> params_;
-  scoped_ptr<ClientSocketPoolHistograms> histograms_;
   scoped_ptr<MockHostResolver> host_resolver_;
   MockTransportClientSocketFactory client_socket_factory_;
   WebSocketTransportClientSocketPool pool_;
@@ -378,60 +376,38 @@ TEST_F(WebSocketTransportClientSocketPoolTest, CancelRequest) {
   EXPECT_EQ(ClientSocketPoolTest::kIndexOutOfBounds, GetOrderOfRequest(7));
 }
 
-class RequestSocketCallback : public TestCompletionCallbackBase {
- public:
-  RequestSocketCallback(ClientSocketHandle* handle,
-                        WebSocketTransportClientSocketPool* pool)
-      : handle_(handle),
-        pool_(pool),
-        within_callback_(false),
-        callback_(base::Bind(&RequestSocketCallback::OnComplete,
-                             base::Unretained(this))) {}
+// Function to be used as a callback on socket request completion.  It first
+// disconnects the successfully connected socket from the first request, and
+// then reuses the ClientSocketHandle to request another socket.  The second
+// request is expected to succeed asynchronously.
+//
+// |nested_callback| is called with the result of the second socket request.
+void RequestSocketOnComplete(ClientSocketHandle* handle,
+                             WebSocketTransportClientSocketPool* pool,
+                             const CompletionCallback& nested_callback,
+                             int first_request_result) {
+  EXPECT_EQ(OK, first_request_result);
 
-  ~RequestSocketCallback() override {}
+  // Don't allow reuse of the socket.  Disconnect it and then release it.
+  handle->socket()->Disconnect();
+  handle->Reset();
 
-  const CompletionCallback& callback() const { return callback_; }
+  scoped_refptr<TransportSocketParams> dest(new TransportSocketParams(
+      HostPortPair("www.google.com", 80), false, false,
+      OnHostResolutionCallback(),
+      TransportSocketParams::COMBINE_CONNECT_AND_WRITE_DEFAULT));
+  int rv =
+      handle->Init("a", dest, LOWEST, nested_callback, pool, BoundNetLog());
+  EXPECT_EQ(ERR_IO_PENDING, rv);
+  if (ERR_IO_PENDING != rv)
+    nested_callback.Run(rv);
+}
 
- private:
-  void OnComplete(int result) {
-    SetResult(result);
-    ASSERT_EQ(OK, result);
-
-    if (!within_callback_) {
-      // Don't allow reuse of the socket.  Disconnect it and then release it and
-      // run through the MessageLoop once to get it completely released.
-      handle_->socket()->Disconnect();
-      handle_->Reset();
-      {
-        base::MessageLoop::ScopedNestableTaskAllower allow(
-            base::MessageLoop::current());
-        base::MessageLoop::current()->RunUntilIdle();
-      }
-      within_callback_ = true;
-      scoped_refptr<TransportSocketParams> dest(
-          new TransportSocketParams(
-              HostPortPair("www.google.com", 80),
-              false,
-              false,
-              OnHostResolutionCallback(),
-              TransportSocketParams::COMBINE_CONNECT_AND_WRITE_DEFAULT));
-      int rv =
-          handle_->Init("a", dest, LOWEST, callback(), pool_, BoundNetLog());
-      EXPECT_EQ(OK, rv);
-    }
-  }
-
-  ClientSocketHandle* const handle_;
-  WebSocketTransportClientSocketPool* const pool_;
-  bool within_callback_;
-  CompletionCallback callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(RequestSocketCallback);
-};
-
+// Tests the case where a second socket is requested in a completion callback,
+// and the second socket connects asynchronously.  Reuses the same
+// ClientSocketHandle for the second socket, after disconnecting the first.
 TEST_F(WebSocketTransportClientSocketPoolTest, RequestTwice) {
   ClientSocketHandle handle;
-  RequestSocketCallback callback(&handle, &pool_);
   scoped_refptr<TransportSocketParams> dest(
       new TransportSocketParams(
           HostPortPair("www.google.com", 80),
@@ -439,15 +415,13 @@ TEST_F(WebSocketTransportClientSocketPoolTest, RequestTwice) {
           false,
           OnHostResolutionCallback(),
           TransportSocketParams::COMBINE_CONNECT_AND_WRITE_DEFAULT));
-  int rv = handle.Init(
-      "a", dest, LOWEST, callback.callback(), &pool_, BoundNetLog());
+  TestCompletionCallback second_result_callback;
+  int rv = handle.Init("a", dest, LOWEST,
+                       base::Bind(&RequestSocketOnComplete, &handle, &pool_,
+                                  second_result_callback.callback()),
+                       &pool_, BoundNetLog());
   ASSERT_EQ(ERR_IO_PENDING, rv);
-
-  // The callback is going to request "www.google.com". We want it to complete
-  // synchronously this time.
-  host_resolver_->set_synchronous_mode(true);
-
-  EXPECT_EQ(OK, callback.WaitForResult());
+  EXPECT_EQ(OK, second_result_callback.WaitForResult());
 
   handle.Reset();
 }
@@ -565,7 +539,6 @@ TEST_F(WebSocketTransportClientSocketPoolTest,
        IPv6FallbackSocketIPv4FinishesFirst) {
   WebSocketTransportClientSocketPool pool(kMaxSockets,
                                           kMaxSocketsPerGroup,
-                                          histograms_.get(),
                                           host_resolver_.get(),
                                           &client_socket_factory_,
                                           NULL);
@@ -606,7 +579,6 @@ TEST_F(WebSocketTransportClientSocketPoolTest,
        IPv6FallbackSocketIPv6FinishesFirst) {
   WebSocketTransportClientSocketPool pool(kMaxSockets,
                                           kMaxSocketsPerGroup,
-                                          histograms_.get(),
                                           host_resolver_.get(),
                                           &client_socket_factory_,
                                           NULL);
@@ -646,7 +618,6 @@ TEST_F(WebSocketTransportClientSocketPoolTest,
        IPv6NoIPv4AddressesToFallbackTo) {
   WebSocketTransportClientSocketPool pool(kMaxSockets,
                                           kMaxSocketsPerGroup,
-                                          histograms_.get(),
                                           host_resolver_.get(),
                                           &client_socket_factory_,
                                           NULL);
@@ -678,7 +649,6 @@ TEST_F(WebSocketTransportClientSocketPoolTest,
 TEST_F(WebSocketTransportClientSocketPoolTest, IPv4HasNoFallback) {
   WebSocketTransportClientSocketPool pool(kMaxSockets,
                                           kMaxSocketsPerGroup,
-                                          histograms_.get(),
                                           host_resolver_.get(),
                                           &client_socket_factory_,
                                           NULL);
@@ -711,7 +681,6 @@ TEST_F(WebSocketTransportClientSocketPoolTest, IPv4HasNoFallback) {
 TEST_F(WebSocketTransportClientSocketPoolTest, IPv6InstantFail) {
   WebSocketTransportClientSocketPool pool(kMaxSockets,
                                           kMaxSocketsPerGroup,
-                                          histograms_.get(),
                                           host_resolver_.get(),
                                           &client_socket_factory_,
                                           NULL);
@@ -748,7 +717,6 @@ TEST_F(WebSocketTransportClientSocketPoolTest, IPv6InstantFail) {
 TEST_F(WebSocketTransportClientSocketPoolTest, IPv6RapidFail) {
   WebSocketTransportClientSocketPool pool(kMaxSockets,
                                           kMaxSocketsPerGroup,
-                                          histograms_.get(),
                                           host_resolver_.get(),
                                           &client_socket_factory_,
                                           NULL);
@@ -775,9 +743,9 @@ TEST_F(WebSocketTransportClientSocketPoolTest, IPv6RapidFail) {
   EXPECT_EQ(ERR_IO_PENDING, rv);
   EXPECT_FALSE(handle.socket());
 
-  base::Time start(base::Time::NowFromSystemTime());
+  base::TimeTicks start(base::TimeTicks::Now());
   EXPECT_EQ(OK, callback.WaitForResult());
-  EXPECT_LT(base::Time::NowFromSystemTime() - start,
+  EXPECT_LT(base::TimeTicks::Now() - start,
             base::TimeDelta::FromMilliseconds(
                 TransportConnectJobHelper::kIPv6FallbackTimerInMs));
   ASSERT_TRUE(handle.socket());
@@ -793,7 +761,6 @@ TEST_F(WebSocketTransportClientSocketPoolTest, IPv6RapidFail) {
 TEST_F(WebSocketTransportClientSocketPoolTest, FirstSuccessWins) {
   WebSocketTransportClientSocketPool pool(kMaxSockets,
                                           kMaxSocketsPerGroup,
-                                          histograms_.get(),
                                           host_resolver_.get(),
                                           &client_socket_factory_,
                                           NULL);
@@ -832,7 +799,6 @@ TEST_F(WebSocketTransportClientSocketPoolTest, FirstSuccessWins) {
 TEST_F(WebSocketTransportClientSocketPoolTest, LastFailureWins) {
   WebSocketTransportClientSocketPool pool(kMaxSockets,
                                           kMaxSocketsPerGroup,
-                                          histograms_.get(),
                                           host_resolver_.get(),
                                           &client_socket_factory_,
                                           NULL);
@@ -859,14 +825,14 @@ TEST_F(WebSocketTransportClientSocketPoolTest, LastFailureWins) {
 
   TestCompletionCallback callback;
   ClientSocketHandle handle;
-  base::Time start(base::Time::NowFromSystemTime());
+  base::TimeTicks start(base::TimeTicks::Now());
   int rv =
       handle.Init("a", params_, LOW, callback.callback(), &pool, BoundNetLog());
   EXPECT_EQ(ERR_IO_PENDING, rv);
 
   EXPECT_EQ(ERR_CONNECTION_FAILED, callback.WaitForResult());
 
-  EXPECT_GE(base::Time::NowFromSystemTime() - start, delay * 5);
+  EXPECT_GE(base::TimeTicks::Now() - start, delay * 5);
 }
 
 // Global timeout for all connects applies. This test is disabled by default
@@ -875,7 +841,6 @@ TEST_F(WebSocketTransportClientSocketPoolTest, LastFailureWins) {
 TEST_F(WebSocketTransportClientSocketPoolTest, DISABLED_OverallTimeoutApplies) {
   WebSocketTransportClientSocketPool pool(kMaxSockets,
                                           kMaxSocketsPerGroup,
-                                          histograms_.get(),
                                           host_resolver_.get(),
                                           &client_socket_factory_,
                                           NULL);

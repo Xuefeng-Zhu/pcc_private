@@ -13,19 +13,21 @@
 #include "base/big_endian.h"
 #include "base/bind.h"
 #include "base/compiler_specific.h"
+#include "base/location.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop/message_loop.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/single_thread_task_runner.h"
 #include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
+#include "base/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "net/base/io_buffer.h"
-#include "net/base/net_log.h"
 #include "net/http/http_request_headers.h"
 #include "net/http/http_response_headers.h"
 #include "net/http/http_util.h"
+#include "net/log/net_log.h"
 #include "net/websockets/websocket_errors.h"
 #include "net/websockets/websocket_event_interface.h"
 #include "net/websockets/websocket_frame.h"
@@ -150,7 +152,7 @@ class WebSocketChannel::SendBuffer {
 
 void WebSocketChannel::SendBuffer::AddFrame(scoped_ptr<WebSocketFrame> frame) {
   total_bytes_ += frame->header.payload_length;
-  frames_.push_back(frame.release());
+  frames_.push_back(frame.Pass());
 }
 
 // Implementation of WebSocketStream::ConnectDelegate that simply forwards the
@@ -549,7 +551,7 @@ void WebSocketChannel::SendAddChannelRequestWithSuppliedCreator(
   if (!socket_url.SchemeIsWSOrWSS()) {
     // TODO(ricea): Kill the renderer (this error should have been caught by
     // Javascript).
-    ignore_result(event_interface_->OnAddChannelResponse(true, "", ""));
+    ignore_result(event_interface_->OnFailChannel("Invalid scheme"));
     // |this| is deleted here.
     return;
   }
@@ -573,8 +575,8 @@ void WebSocketChannel::OnConnectSuccess(scoped_ptr<WebSocketStream> stream) {
 
   SetState(CONNECTED);
 
-  if (event_interface_->OnAddChannelResponse(
-          false, stream_->GetSubProtocol(), stream_->GetExtensions()) ==
+  if (event_interface_->OnAddChannelResponse(stream_->GetSubProtocol(),
+                                             stream_->GetExtensions()) ==
       CHANNEL_DELETED)
     return;
 
@@ -640,10 +642,9 @@ void WebSocketChannel::OnFinishOpeningHandshake(
 }
 
 void WebSocketChannel::ScheduleOpeningHandshakeNotification() {
-  base::MessageLoop::current()->PostTask(
-      FROM_HERE,
-      base::Bind(HandshakeNotificationSender::Send,
-                 notification_sender_->AsWeakPtr()));
+  base::ThreadTaskRunnerHandle::Get()->PostTask(
+      FROM_HERE, base::Bind(HandshakeNotificationSender::Send,
+                            notification_sender_->AsWeakPtr()));
 }
 
 ChannelState WebSocketChannel::WriteFrames() {

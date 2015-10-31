@@ -5,11 +5,16 @@
 #include "net/test/url_request/url_request_mock_data_job.h"
 
 #include "base/bind.h"
-#include "base/message_loop/message_loop.h"
+#include "base/location.h"
+#include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
+#include "base/strings/stringprintf.h"
+#include "base/thread_task_runner_handle.h"
 #include "net/base/io_buffer.h"
 #include "net/base/url_util.h"
 #include "net/http/http_request_headers.h"
+#include "net/http/http_response_headers.h"
+#include "net/http/http_util.h"
 #include "net/url_request/url_request_filter.h"
 
 namespace net {
@@ -19,7 +24,7 @@ const char kMockHostname[] = "mock.data";
 
 // Gets the data from URL of the form:
 // scheme://kMockHostname/?data=abc&repeat_count=nnn.
-std::string GetDataFromRequest(const net::URLRequest& request) {
+std::string GetDataFromRequest(const URLRequest& request) {
   std::string value;
   if (!GetValueForKeyInQuery(request.url(), "data", &value))
     return "default_data";
@@ -28,7 +33,7 @@ std::string GetDataFromRequest(const net::URLRequest& request) {
 
 // Gets the numeric repeat count from URL of the form:
 // scheme://kMockHostname/?data=abc&repeat_count=nnn.
-int GetRepeatCountFromRequest(const net::URLRequest& request) {
+int GetRepeatCountFromRequest(const URLRequest& request) {
   std::string value;
   if (!GetValueForKeyInQuery(request.url(), "repeat", &value))
     return 1;
@@ -55,15 +60,15 @@ GURL GetMockUrl(const std::string& scheme,
   return GURL(url);
 }
 
-class MockJobInterceptor : public net::URLRequestInterceptor {
+class MockJobInterceptor : public URLRequestInterceptor {
  public:
   MockJobInterceptor() {}
   ~MockJobInterceptor() override {}
 
-  // net::URLRequestInterceptor implementation
-  net::URLRequestJob* MaybeInterceptRequest(
-      net::URLRequest* request,
-      net::NetworkDelegate* network_delegate) const override {
+  // URLRequestInterceptor implementation
+  URLRequestJob* MaybeInterceptRequest(
+      URLRequest* request,
+      NetworkDelegate* network_delegate) const override {
     return new URLRequestMockDataJob(request, network_delegate,
                                      GetDataFromRequest(*request),
                                      GetRepeatCountFromRequest(*request));
@@ -91,7 +96,7 @@ URLRequestMockDataJob::URLRequestMockDataJob(URLRequest* request,
 void URLRequestMockDataJob::Start() {
   // Start reading asynchronously so that all error reporting and data
   // callbacks happen as they would for network requests.
-  base::MessageLoop::current()->PostTask(
+  base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE, base::Bind(&URLRequestMockDataJob::StartAsync,
                             weak_factory_.GetWeakPtr()));
 }
@@ -110,6 +115,31 @@ bool URLRequestMockDataJob::ReadRawData(IOBuffer* buf,
   return true;
 }
 
+int URLRequestMockDataJob::GetResponseCode() const {
+  HttpResponseInfo info;
+  GetResponseInfoConst(&info);
+  return info.headers->response_code();
+}
+
+// Public virtual version.
+void URLRequestMockDataJob::GetResponseInfo(HttpResponseInfo* info) {
+  // Forward to private const version.
+  GetResponseInfoConst(info);
+}
+
+// Private const version.
+void URLRequestMockDataJob::GetResponseInfoConst(HttpResponseInfo* info) const {
+  // Send back mock headers.
+  std::string raw_headers;
+  raw_headers.append(
+      "HTTP/1.1 200 OK\n"
+      "Content-type: text/plain\n");
+  raw_headers.append(base::StringPrintf("Content-Length: %1d\n",
+                                        static_cast<int>(data_.length())));
+  info->headers = new HttpResponseHeaders(HttpUtil::AssembleRawHeaders(
+      raw_headers.c_str(), static_cast<int>(raw_headers.length())));
+}
+
 void URLRequestMockDataJob::StartAsync() {
   if (!request_)
     return;
@@ -126,8 +156,8 @@ void URLRequestMockDataJob::AddUrlHandler() {
 // static
 void URLRequestMockDataJob::AddUrlHandlerForHostname(
     const std::string& hostname) {
-  // Add |hostname| to net::URLRequestFilter for HTTP and HTTPS.
-  net::URLRequestFilter* filter = net::URLRequestFilter::GetInstance();
+  // Add |hostname| to URLRequestFilter for HTTP and HTTPS.
+  URLRequestFilter* filter = URLRequestFilter::GetInstance();
   filter->AddHostnameInterceptor("http", hostname,
                                  make_scoped_ptr(new MockJobInterceptor()));
   filter->AddHostnameInterceptor("https", hostname,

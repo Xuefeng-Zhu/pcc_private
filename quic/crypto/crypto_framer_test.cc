@@ -2,12 +2,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "net/quic/crypto/crypto_framer.h"
+
 #include <map>
 #include <vector>
 
 #include "base/logging.h"
 #include "base/memory/scoped_ptr.h"
-#include "net/quic/crypto/crypto_framer.h"
 #include "net/quic/crypto/crypto_handshake.h"
 #include "net/quic/crypto/crypto_protocol.h"
 #include "net/quic/quic_protocol.h"
@@ -29,7 +30,7 @@ char* AsChars(unsigned char* data) { return reinterpret_cast<char*>(data); }
 
 namespace test {
 
-class TestCryptoVisitor : public ::net::CryptoFramerVisitorInterface {
+class TestCryptoVisitor : public CryptoFramerVisitorInterface {
  public:
   TestCryptoVisitor() : error_count_(0) {}
 

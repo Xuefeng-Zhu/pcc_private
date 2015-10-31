@@ -9,7 +9,6 @@
 #include "net/quic/quic_data_writer.h"
 
 using base::StringPiece;
-using std::make_pair;
 using std::pair;
 using std::vector;
 
@@ -106,8 +105,8 @@ QuicData* CryptoFramer::ConstructHandshakeMessage(
     return nullptr;
   }
 
-
-  QuicDataWriter writer(len);
+  scoped_ptr<char[]> buffer(new char[len]);
+  QuicDataWriter writer(len, buffer.get());
   if (!writer.WriteUInt32(message.tag())) {
     DCHECK(false) << "Failed to write message tag.";
     return nullptr;
@@ -181,7 +180,7 @@ QuicData* CryptoFramer::ConstructHandshakeMessage(
     }
   }
 
-  return new QuicData(writer.take(), len, true);
+  return new QuicData(buffer.release(), len, true);
 }
 
 void CryptoFramer::Clear() {
@@ -242,8 +241,8 @@ QuicErrorCode CryptoFramer::Process(StringPiece input) {
         if (end_offset < last_end_offset) {
           return QUIC_CRYPTO_TAGS_OUT_OF_ORDER;
         }
-        tags_and_lengths_.push_back(
-            make_pair(tag, static_cast<size_t>(end_offset - last_end_offset)));
+        tags_and_lengths_.push_back(std::make_pair(
+            tag, static_cast<size_t>(end_offset - last_end_offset)));
         last_end_offset = end_offset;
       }
       values_len_ = last_end_offset;
@@ -253,12 +252,10 @@ QuicErrorCode CryptoFramer::Process(StringPiece input) {
       if (reader.BytesRemaining() < values_len_) {
         break;
       }
-      for (vector<pair<QuicTag, size_t> >::const_iterator
-           it = tags_and_lengths_.begin(); it != tags_and_lengths_.end();
-           it++) {
+      for (const pair<QuicTag, size_t>& item : tags_and_lengths_) {
         StringPiece value;
-        reader.ReadStringPiece(&value, it->second);
-        message_.SetStringPiece(it->first, value);
+        reader.ReadStringPiece(&value, item.second);
+        message_.SetStringPiece(item.first, value);
       }
       visitor_->OnHandshakeMessage(message_);
       Clear();

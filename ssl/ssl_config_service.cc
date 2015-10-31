@@ -11,7 +11,7 @@
 namespace net {
 
 SSLConfigService::SSLConfigService()
-    : observer_list_(ObserverList<Observer>::NOTIFY_EXISTING_ONLY) {
+    : observer_list_(base::ObserverList<Observer>::NOTIFY_EXISTING_ONLY) {
 }
 
 // GlobalSSLObject holds a reference to a global SSL object, such as the
@@ -92,8 +92,7 @@ void SSLConfigService::ProcessConfigUpdate(const SSLConfig& orig_config,
        new_config.disabled_cipher_suites) ||
       (orig_config.channel_id_enabled != new_config.channel_id_enabled) ||
       (orig_config.false_start_enabled != new_config.false_start_enabled) ||
-      (orig_config.require_forward_secrecy !=
-       new_config.require_forward_secrecy);
+      (orig_config.require_ecdhe != new_config.require_ecdhe);
 
   if (config_changed)
     NotifySSLConfigChange();

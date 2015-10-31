@@ -5,6 +5,7 @@
 #include "net/quic/quic_utils.h"
 
 #include <ctype.h>
+#include <stdint.h>
 
 #include <algorithm>
 #include <vector>
@@ -12,7 +13,6 @@
 #include "base/basictypes.h"
 #include "base/containers/adapters.h"
 #include "base/logging.h"
-#include "base/port.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -25,8 +25,8 @@ namespace net {
 
 // static
 uint64 QuicUtils::FNV1a_64_Hash(const char* data, int len) {
-  static const uint64 kOffset = GG_UINT64_C(14695981039346656037);
-  static const uint64 kPrime = GG_UINT64_C(1099511628211);
+  static const uint64 kOffset = UINT64_C(14695981039346656037);
+  static const uint64 kPrime = UINT64_C(1099511628211);
 
   const uint8* octets = reinterpret_cast<const uint8*>(data);
 
@@ -42,23 +42,36 @@ uint64 QuicUtils::FNV1a_64_Hash(const char* data, int len) {
 
 // static
 uint128 QuicUtils::FNV1a_128_Hash(const char* data, int len) {
-  // The following two constants are defined as part of the hash algorithm.
+  return FNV1a_128_Hash_Two(data, len, nullptr, 0);
+}
+
+// static
+uint128 QuicUtils::FNV1a_128_Hash_Two(const char* data1,
+                                      int len1,
+                                      const char* data2,
+                                      int len2) {
+  // The two constants are defined as part of the hash algorithm.
   // see http://www.isthe.com/chongo/tech/comp/fnv/
+  // 144066263297769815596495629667062367629
+  const uint128 kOffset(UINT64_C(7809847782465536322),
+                        UINT64_C(7113472399480571277));
+
+  uint128 hash = IncrementalHash(kOffset, data1, len1);
+  if (data2 == nullptr) {
+    return hash;
+  }
+  return IncrementalHash(hash, data2, len2);
+}
+
+// static
+uint128 QuicUtils::IncrementalHash(uint128 hash, const char* data, size_t len) {
   // 309485009821345068724781371
   const uint128 kPrime(16777216, 315);
-  // 144066263297769815596495629667062367629
-  const uint128 kOffset(GG_UINT64_C(7809847782465536322),
-                        GG_UINT64_C(7113472399480571277));
-
   const uint8* octets = reinterpret_cast<const uint8*>(data);
-
-  uint128 hash = kOffset;
-
-  for (int i = 0; i < len; ++i) {
+  for (size_t i = 0; i < len; ++i) {
     hash  = hash ^ uint128(0, octets[i]);
     hash = hash * kPrime;
   }
-
   return hash;
 }
 
@@ -107,15 +120,6 @@ bool QuicUtils::FindMutualTag(const QuicTagVector& our_tags_vector,
   }
 
   return false;
-}
-
-// static
-void QuicUtils::SerializeUint128(uint128 v, uint8* out) {
-  const uint64 lo = Uint128Low64(v);
-  const uint64 hi = Uint128High64(v);
-  // This assumes that the system is little-endian.
-  memcpy(out, &lo, sizeof(lo));
-  memcpy(out + sizeof(lo), &hi, sizeof(hi));
 }
 
 // static
@@ -184,6 +188,7 @@ const char* QuicUtils::ErrorToString(QuicErrorCode error) {
     RETURN_STRING_LITERAL(QUIC_CRYPTO_MESSAGE_AFTER_HANDSHAKE_COMPLETE);
     RETURN_STRING_LITERAL(QUIC_CRYPTO_INTERNAL_ERROR);
     RETURN_STRING_LITERAL(QUIC_CRYPTO_VERSION_NOT_SUPPORTED);
+    RETURN_STRING_LITERAL(QUIC_CRYPTO_HANDSHAKE_STATELESS_REJECT);
     RETURN_STRING_LITERAL(QUIC_CRYPTO_NO_SUPPORT);
     RETURN_STRING_LITERAL(QUIC_INVALID_CRYPTO_MESSAGE_TYPE);
     RETURN_STRING_LITERAL(QUIC_INVALID_CRYPTO_MESSAGE_PARAMETER);
@@ -221,6 +226,11 @@ const char* QuicUtils::ErrorToString(QuicErrorCode error) {
     RETURN_STRING_LITERAL(QUIC_VERSION_NEGOTIATION_MISMATCH);
     RETURN_STRING_LITERAL(QUIC_TOO_MANY_OUTSTANDING_SENT_PACKETS);
     RETURN_STRING_LITERAL(QUIC_TOO_MANY_OUTSTANDING_RECEIVED_PACKETS);
+    RETURN_STRING_LITERAL(QUIC_CONNECTION_CANCELLED);
+    RETURN_STRING_LITERAL(QUIC_BAD_PACKET_LOSS_RATE);
+    RETURN_STRING_LITERAL(QUIC_PUBLIC_RESETS_POST_HANDSHAKE);
+    RETURN_STRING_LITERAL(QUIC_TIMEOUTS_WITH_OPEN_STREAMS);
+    RETURN_STRING_LITERAL(QUIC_FAILED_TO_SERIALIZE_PACKET);
     RETURN_STRING_LITERAL(QUIC_LAST_ERROR);
     // Intentionally have no default case, so we'll break the build
     // if we add errors and don't put them here.
@@ -285,11 +295,11 @@ string QuicUtils::TagToString(QuicTag tag) {
 QuicTagVector QuicUtils::ParseQuicConnectionOptions(
     const std::string& connection_options) {
   QuicTagVector options;
-  std::vector<std::string> tokens;
-  base::SplitString(connection_options, ',', &tokens);
   // Tokens are expected to be no more than 4 characters long, but we
   // handle overflow gracefully.
-  for (const std::string& token : tokens) {
+  for (const base::StringPiece& token :
+       base::SplitStringPiece(connection_options, ",", base::TRIM_WHITESPACE,
+                              base::SPLIT_WANT_ALL)) {
     uint32 option = 0;
     for (char token_char : base::Reversed(token)) {
       option <<= 8;
@@ -330,11 +340,6 @@ string QuicUtils::StringToHexASCIIDump(StringPiece in_buffer) {
     s += '\n';
   }
   return s;
-}
-
-// static
-QuicPriority QuicUtils::LowestPriority() {
-  return QuicWriteBlockedList::kLowestPriority;
 }
 
 // static

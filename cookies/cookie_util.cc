@@ -24,7 +24,8 @@ bool DomainIsHostOnly(const std::string& domain_string) {
 
 std::string GetEffectiveDomain(const std::string& scheme,
                                const std::string& host) {
-  if (scheme == "http" || scheme == "https") {
+  if (scheme == "http" || scheme == "https" || scheme == "ws" ||
+      scheme == "wss") {
     return registry_controlled_domains::GetDomainAndRegistry(
         host,
         registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
@@ -117,14 +118,15 @@ base::Time ParseCookieTime(const std::string& time_string) {
   while (tokenizer.GetNext()) {
     const std::string token = tokenizer.token();
     DCHECK(!token.empty());
-    bool numerical = IsAsciiDigit(token[0]);
+    bool numerical = base::IsAsciiDigit(token[0]);
 
     // String field
     if (!numerical) {
       if (!found_month) {
         for (int i = 0; i < kMonthsLen; ++i) {
           // Match prefix, so we could match January, etc
-          if (base::strncasecmp(token.c_str(), kMonths[i], 3) == 0) {
+          if (base::StartsWith(token, base::StringPiece(kMonths[i], 3),
+                               base::CompareCase::INSENSITIVE_ASCII)) {
             exploded.month = i + 1;
             found_month = true;
             break;
@@ -265,6 +267,5 @@ std::string SerializeRequestCookieLine(
   return buffer;
 }
 
-}  // namespace cookie_utils
+}  // namespace cookie_util
 }  // namespace net
-

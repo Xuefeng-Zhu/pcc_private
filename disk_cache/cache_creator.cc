@@ -4,7 +4,6 @@
 
 #include "base/files/file_path.h"
 #include "base/metrics/field_trial.h"
-#include "base/profiler/scoped_tracker.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/stringprintf.h"
 #include "net/base/cache_type.h"
@@ -123,12 +122,7 @@ int CacheCreator::Run() {
 void CacheCreator::DoCallback(int result) {
   DCHECK_NE(net::ERR_IO_PENDING, result);
   if (result == net::OK) {
-#ifndef USE_TRACING_CACHE_BACKEND
     *backend_ = created_cache_.Pass();
-#else
-    *backend_.reset(
-        new disk_cache::TracingCacheBackend(created_cache_.Pass()));
-#endif
   } else {
     LOG(ERROR) << "Unable to create cache";
     created_cache_.reset();
@@ -140,10 +134,6 @@ void CacheCreator::DoCallback(int result) {
 // If the initialization of the cache fails, and |force| is true, we will
 // discard the whole cache and create a new one.
 void CacheCreator::OnIOComplete(int result) {
-  // TODO(vadimt): Remove ScopedTracker below once crbug.com/422516 is fixed.
-  tracked_objects::ScopedTracker tracking_profile(
-      FROM_HERE_WITH_EXPLICIT_FUNCTION("422516 CacheCreator::OnIOComplete"));
-
   if (result == net::OK || !force_ || retry_)
     return DoCallback(result);
 

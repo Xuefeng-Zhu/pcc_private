@@ -25,65 +25,51 @@ bool FLAGS_quic_use_bbr_congestion_control = false;
 // connection options.
 bool FLAGS_quic_allow_bbr = false;
 
-// Do not flip this flag.  jokulik plans more testing and additional monitoring
-// before the flag can go the auto-flip process.
-//
-// If true, record the timestamp for the last sent new packet before the call to
-// WritePacket, rather than after in QUIC.
-bool FLAGS_quic_record_send_time_before_write = false;
-
-// If true, enables the QUIC bandwidth resumption experiment (triggered by
-// Chrome/Finch).
-bool FLAGS_quic_enable_bandwidth_resumption_experiment = true;
-
-// If true, QUIC congestion control will be paced.  If false, pacing may be
-// controlled by QUIC connection options in the config or by enabling BBR
-// congestion control.
-bool FLAGS_quic_enable_pacing = false;
-
-// If true, the silent close option will be honored.
-bool FLAGS_quic_allow_silent_close = true;
-
-// If true, use std::cbrt instead of custom cube root.
-bool FLAGS_quic_use_std_cbrt = true;
-
-// If true, then the source address tokens generated for QUIC connects will
-// store multiple addresses.
-bool FLAGS_quic_use_multiple_address_in_source_tokens = false;
-
-// If true, if min RTT and/or SRTT have not yet been set then initial RTT is
-// used to initialize them in a call to QuicConnection::GetStats.
-bool FLAGS_quic_use_initial_rtt_for_stats = true;
-
-// If true, uses the last sent packet for the RTO timer instead of the earliest.
-bool FLAGS_quic_rto_uses_last_sent = true;
-
-// If true, attach QuicAckNotifiers to packets rather than individual stream
-// frames.
-bool FLAGS_quic_attach_ack_notifiers_to_packets = true;
-
-// If true, the AckNotifierManager is informed about new packets as soon as they
-// are serialized.
-bool FLAGS_quic_ack_notifier_informed_on_serialized = true;
-
-// If true, QUIC will use the new RTO that waits until an ack arrives to adjust
-// the congestion window.
-bool FLAGS_quic_use_new_rto = true;
-
 // Time period for which a given connection_id should live in the time-wait
 // state.
-int64 FLAGS_quic_time_wait_list_seconds = 5;
+int64 FLAGS_quic_time_wait_list_seconds = 200;
 
 // Currently, this number is quite conservative.  The max QPS limit for an
 // individual server silo is currently set to 1000 qps, though the actual max
-// that we see in the wild is closer to 450 qps. Regardless, this means that the
-// longest time-wait list we should see is 5 seconds * 1000 qps = 5000.  If we
-// allow for an order of magnitude leeway, we have 50000.
+// that we see in the wild is closer to 450 qps.  Regardless, this means that
+// the longest time-wait list we should see is 200 seconds * 1000 qps = 200000.
+// Of course, there are usually many queries per QUIC connection, so we allow a
+// factor of 3 leeway.
 //
 // Maximum number of connections on the time-wait list. A negative value implies
 // no configured limit.
-int64 FLAGS_quic_time_wait_list_max_connections = 50000;
+int64 FLAGS_quic_time_wait_list_max_connections = 600000;
 
-// If true, limit the number of connections on the quic time-wait list using a
-// flag.
-bool FLAGS_quic_limit_time_wait_list_size = true;
+// Enables server-side support for QUIC stateless rejects.
+bool FLAGS_enable_quic_stateless_reject_support = true;
+
+// If true, flow controller may grow the receive window size if necessary.
+bool FLAGS_quic_auto_tune_receive_window = true;
+
+// Limits QUIC's max CWND to 200 packets.
+bool FLAGS_quic_limit_max_cwnd = true;
+
+// If true, require handshake confirmation for QUIC connections, functionally
+// disabling 0-rtt handshakes.
+// TODO(rtenneti): Enable this flag after fixing tests.
+bool FLAGS_quic_require_handshake_confirmation = false;
+
+// Disables special treatment of truncated acks, since older retransmissions are
+// proactively discarded in QUIC.
+bool FLAGS_quic_disable_truncated_ack_handling = true;
+
+// If true, after a server silo receives a packet from a migrated QUIC
+// client, a GO_AWAY frame is sent to the client.
+bool FLAGS_send_goaway_after_client_migration = true;
+
+// Close the connection instead of attempting to write a packet out of sequence
+// number order.
+bool FLAGS_quic_close_connection_out_of_order_sending = true;
+
+// QUIC-specific flag. If true, Cubic's epoch is reset when the sender is
+// application-limited.
+bool FLAGS_reset_cubic_epoch_when_app_limited = true;
+
+// If true, use an interval set as the internal representation of a packet queue
+// instead of a set.
+bool FLAGS_quic_packet_queue_use_interval_set = true;

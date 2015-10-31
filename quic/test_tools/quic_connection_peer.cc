@@ -5,7 +5,6 @@
 #include "net/quic/test_tools/quic_connection_peer.h"
 
 #include "base/stl_util.h"
-#include "net/quic/congestion_control/receive_algorithm_interface.h"
 #include "net/quic/congestion_control/send_algorithm_interface.h"
 #include "net/quic/quic_connection.h"
 #include "net/quic/quic_packet_writer.h"
@@ -23,14 +22,6 @@ void QuicConnectionPeer::SendAck(QuicConnection* connection) {
 }
 
 // static
-void QuicConnectionPeer::SetReceiveAlgorithm(
-    QuicConnection* connection,
-    ReceiveAlgorithmInterface* receive_algorithm) {
-  connection->received_packet_manager_.receive_algorithm_.reset(
-      receive_algorithm);
-}
-
-// static
 void QuicConnectionPeer::SetSendAlgorithm(
     QuicConnection* connection,
     SendAlgorithmInterface* send_algorithm) {
@@ -38,14 +29,16 @@ void QuicConnectionPeer::SetSendAlgorithm(
 }
 
 // static
-QuicAckFrame* QuicConnectionPeer::CreateAckFrame(QuicConnection* connection) {
-  return connection->CreateAckFrame();
+void QuicConnectionPeer::PopulateAckFrame(QuicConnection* connection,
+                                          QuicAckFrame* ack) {
+  connection->PopulateAckFrame(ack);
 }
 
 // static
-QuicStopWaitingFrame* QuicConnectionPeer::CreateStopWaitingFrame(
-    QuicConnection* connection) {
-  return connection->CreateStopWaitingFrame();
+void QuicConnectionPeer::PopulateStopWaitingFrame(
+    QuicConnection* connection,
+    QuicStopWaitingFrame* stop_waiting) {
+  connection->PopulateStopWaitingFrame(stop_waiting);
 }
 
 // static
@@ -74,42 +67,19 @@ QuicSentPacketManager* QuicConnectionPeer::GetSentPacketManager(
 }
 
 // static
-QuicReceivedPacketManager* QuicConnectionPeer::GetReceivedPacketManager(
-    QuicConnection* connection) {
-  return &connection->received_packet_manager_;
-}
-
-// static
 QuicTime::Delta QuicConnectionPeer::GetNetworkTimeout(
     QuicConnection* connection) {
   return connection->idle_network_timeout_;
 }
 
 // static
-bool QuicConnectionPeer::IsSavedForRetransmission(
-    QuicConnection* connection,
-    QuicPacketSequenceNumber sequence_number) {
-  return connection->sent_packet_manager_.IsUnacked(sequence_number) &&
-      connection->sent_packet_manager_.HasRetransmittableFrames(
-          sequence_number);
-}
-
-// static
-bool QuicConnectionPeer::IsRetransmission(
-    QuicConnection* connection,
-    QuicPacketSequenceNumber sequence_number) {
-  return QuicSentPacketManagerPeer::IsRetransmission(
-      &connection->sent_packet_manager_, sequence_number);
-}
-
-// static
 // TODO(ianswett): Create a GetSentEntropyHash which accepts an AckFrame.
 QuicPacketEntropyHash QuicConnectionPeer::GetSentEntropyHash(
     QuicConnection* connection,
-    QuicPacketSequenceNumber sequence_number) {
+    QuicPacketNumber packet_number) {
   QuicSentEntropyManager::CumulativeEntropy last_entropy_copy =
       connection->sent_entropy_manager_.last_cumulative_entropy_;
-  connection->sent_entropy_manager_.UpdateCumulativeEntropy(sequence_number,
+  connection->sent_entropy_manager_.UpdateCumulativeEntropy(packet_number,
                                                             &last_entropy_copy);
   return last_entropy_copy.entropy;
 }
@@ -117,28 +87,22 @@ QuicPacketEntropyHash QuicConnectionPeer::GetSentEntropyHash(
 // static
 QuicPacketEntropyHash QuicConnectionPeer::PacketEntropy(
     QuicConnection* connection,
-    QuicPacketSequenceNumber sequence_number) {
-  return connection->sent_entropy_manager_.GetPacketEntropy(sequence_number);
+    QuicPacketNumber packet_number) {
+  return connection->sent_entropy_manager_.GetPacketEntropy(packet_number);
 }
 
 // static
 QuicPacketEntropyHash QuicConnectionPeer::ReceivedEntropyHash(
     QuicConnection* connection,
-    QuicPacketSequenceNumber sequence_number) {
-  return connection->received_packet_manager_.EntropyHash(
-      sequence_number);
+    QuicPacketNumber packet_number) {
+  return connection->received_packet_manager_.EntropyHash(packet_number);
 }
 
 // static
-bool QuicConnectionPeer::IsServer(QuicConnection* connection) {
-  return connection->is_server_;
-}
-
-// static
-void QuicConnectionPeer::SetIsServer(QuicConnection* connection,
-                                     bool is_server) {
-  connection->is_server_ = is_server;
-  QuicFramerPeer::SetIsServer(&connection->framer_, is_server);
+void QuicConnectionPeer::SetPerspective(QuicConnection* connection,
+                                        Perspective perspective) {
+  connection->perspective_ = perspective;
+  QuicFramerPeer::SetPerspective(&connection->framer_, perspective);
 }
 
 // static
@@ -220,6 +184,12 @@ QuicAlarm* QuicConnectionPeer::GetTimeoutAlarm(QuicConnection* connection) {
 }
 
 // static
+QuicAlarm* QuicConnectionPeer::GetMtuDiscoveryAlarm(
+    QuicConnection* connection) {
+  return connection->mtu_discovery_alarm_.get();
+}
+
+// static
 QuicPacketWriter* QuicConnectionPeer::GetWriter(QuicConnection* connection) {
   return connection->writer_;
 }
@@ -247,26 +217,39 @@ QuicEncryptedPacket* QuicConnectionPeer::GetConnectionClosePacket(
 }
 
 // static
-void QuicConnectionPeer::SetSupportedVersions(QuicConnection* connection,
-                                              QuicVersionVector versions) {
-  connection->framer_.SetSupportedVersions(versions);
-}
-
-// static
 QuicPacketHeader* QuicConnectionPeer::GetLastHeader(
     QuicConnection* connection) {
   return &connection->last_header_;
 }
 
 // static
-void QuicConnectionPeer::SetSequenceNumberOfLastSentPacket(
-    QuicConnection* connection, QuicPacketSequenceNumber number) {
-  connection->sequence_number_of_last_sent_packet_ = number;
+void QuicConnectionPeer::SetPacketNumberOfLastSentPacket(
+    QuicConnection* connection,
+    QuicPacketNumber number) {
+  connection->packet_number_of_last_sent_packet_ = number;
 }
 
 // static
 QuicConnectionStats* QuicConnectionPeer::GetStats(QuicConnection* connection) {
   return &connection->stats_;
+}
+
+// static
+QuicPacketCount QuicConnectionPeer::GetPacketsBetweenMtuProbes(
+    QuicConnection* connection) {
+  return connection->packets_between_mtu_probes_;
+}
+
+// static
+void QuicConnectionPeer::SetPacketsBetweenMtuProbes(QuicConnection* connection,
+                                                    QuicPacketCount packets) {
+  connection->packets_between_mtu_probes_ = packets;
+}
+
+// static
+void QuicConnectionPeer::SetNextMtuProbeAt(QuicConnection* connection,
+                                           QuicPacketNumber number) {
+  connection->next_mtu_probe_at_ = number;
 }
 
 }  // namespace test

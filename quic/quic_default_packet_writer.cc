@@ -6,7 +6,7 @@
 
 #include "base/location.h"
 #include "base/logging.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/metrics/sparse_histogram.h"
 #include "net/base/io_buffer.h"
 #include "net/base/net_errors.h"
@@ -16,19 +16,16 @@ namespace net {
 QuicDefaultPacketWriter::QuicDefaultPacketWriter() : weak_factory_(this) {
 }
 
-QuicDefaultPacketWriter::QuicDefaultPacketWriter(DatagramClientSocket* socket)
-    : socket_(socket),
-      write_blocked_(false),
-      weak_factory_(this) {
-}
+QuicDefaultPacketWriter::QuicDefaultPacketWriter(Socket* socket)
+    : socket_(socket), write_blocked_(false), weak_factory_(this) {}
 
 QuicDefaultPacketWriter::~QuicDefaultPacketWriter() {}
 
 WriteResult QuicDefaultPacketWriter::WritePacket(
     const char* buffer,
     size_t buf_len,
-    const net::IPAddressNumber& self_address,
-    const net::IPEndPoint& peer_address) {
+    const IPAddressNumber& self_address,
+    const IPEndPoint& peer_address) {
   scoped_refptr<StringIOBuffer> buf(
       new StringIOBuffer(std::string(buffer, buf_len)));
   DCHECK(!IsWriteBlocked());
@@ -79,6 +76,11 @@ void QuicDefaultPacketWriter::OnWriteComplete(int rv) {
     connection_->OnWriteError(rv);
   }
   connection_->OnCanWrite();
+}
+
+QuicByteCount QuicDefaultPacketWriter::GetMaxPacketSize(
+    const IPEndPoint& peer_address) const {
+  return kMaxPacketSize;
 }
 
 }  // namespace net

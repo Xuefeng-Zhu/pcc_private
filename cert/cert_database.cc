@@ -13,7 +13,8 @@ namespace net {
 CertDatabase* CertDatabase::GetInstance() {
   // Leaky so it can be initialized on worker threads, and because there is no
   // useful cleanup to do.
-  return Singleton<CertDatabase, LeakySingletonTraits<CertDatabase> >::get();
+  return base::Singleton<CertDatabase,
+                         base::LeakySingletonTraits<CertDatabase>>::get();
 }
 
 void CertDatabase::AddObserver(Observer* observer) {
@@ -25,17 +26,19 @@ void CertDatabase::RemoveObserver(Observer* observer) {
 }
 
 void CertDatabase::NotifyObserversOfCertAdded(const X509Certificate* cert) {
-  observer_list_->Notify(&Observer::OnCertAdded, make_scoped_refptr(cert));
+  observer_list_->Notify(FROM_HERE, &Observer::OnCertAdded,
+                         make_scoped_refptr(cert));
 }
 
 void CertDatabase::NotifyObserversOfCertRemoved(const X509Certificate* cert) {
-  observer_list_->Notify(&Observer::OnCertRemoved, make_scoped_refptr(cert));
+  observer_list_->Notify(FROM_HERE, &Observer::OnCertRemoved,
+                         make_scoped_refptr(cert));
 }
 
 void CertDatabase::NotifyObserversOfCACertChanged(
     const X509Certificate* cert) {
-  observer_list_->Notify(
-      &Observer::OnCACertChanged, make_scoped_refptr(cert));
+  observer_list_->Notify(FROM_HERE, &Observer::OnCACertChanged,
+                         make_scoped_refptr(cert));
 }
 
 }  // namespace net

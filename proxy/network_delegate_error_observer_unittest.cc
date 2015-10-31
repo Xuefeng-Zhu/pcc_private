@@ -6,7 +6,9 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/message_loop/message_loop_proxy.h"
+#include "base/location.h"
+#include "base/single_thread_task_runner.h"
+#include "base/thread_task_runner_handle.h"
 #include "base/threading/thread.h"
 #include "net/base/net_errors.h"
 #include "net/base/network_delegate_impl.h"
@@ -16,7 +18,7 @@ namespace net {
 
 namespace {
 
-class TestNetworkDelegate : public net::NetworkDelegateImpl {
+class TestNetworkDelegate : public NetworkDelegateImpl {
  public:
   TestNetworkDelegate() : got_pac_error_(false) {}
   ~TestNetworkDelegate() override {}
@@ -24,7 +26,7 @@ class TestNetworkDelegate : public net::NetworkDelegateImpl {
   bool got_pac_error() const { return got_pac_error_; }
 
  private:
-  // net::NetworkDelegate implementation.
+  // NetworkDelegate implementation.
   int OnBeforeURLRequest(URLRequest* request,
                          const CompletionCallback& callback,
                          GURL* new_url) override {
@@ -43,12 +45,11 @@ class TestNetworkDelegate : public net::NetworkDelegateImpl {
       const HttpResponseHeaders* original_response_headers,
       scoped_refptr<HttpResponseHeaders>* override_response_headers,
       GURL* allowed_unsafe_redirect_url) override {
-    return net::OK;
+    return OK;
   }
   void OnBeforeRedirect(URLRequest* request,
                         const GURL& new_location) override {}
   void OnResponseStarted(URLRequest* request) override {}
-  void OnRawBytesRead(const URLRequest& request, int bytes_read) override {}
   void OnCompleted(URLRequest* request, bool started) override {}
   void OnURLRequestDestroyed(URLRequest* request) override {}
 
@@ -70,18 +71,13 @@ class TestNetworkDelegate : public net::NetworkDelegateImpl {
                       CookieOptions* options) override {
     return true;
   }
-  bool OnCanAccessFile(const net::URLRequest& request,
+  bool OnCanAccessFile(const URLRequest& request,
                        const base::FilePath& path) const override {
     return true;
-  }
-  bool OnCanThrottleRequest(const URLRequest& request) const override {
-    return false;
   }
 
   bool got_pac_error_;
 };
-
-}  // namespace
 
 // Check that the OnPACScriptError method can be called from an arbitrary
 // thread.
@@ -90,13 +86,10 @@ TEST(NetworkDelegateErrorObserverTest, CallOnThread) {
   thread.Start();
   TestNetworkDelegate network_delegate;
   NetworkDelegateErrorObserver observer(
-      &network_delegate, base::MessageLoopProxy::current().get());
-  thread.message_loop()
-      ->PostTask(FROM_HERE,
-                 base::Bind(&NetworkDelegateErrorObserver::OnPACScriptError,
-                            base::Unretained(&observer),
-                            42,
-                            base::string16()));
+      &network_delegate, base::ThreadTaskRunnerHandle::Get().get());
+  thread.task_runner()->PostTask(
+      FROM_HERE, base::Bind(&NetworkDelegateErrorObserver::OnPACScriptError,
+                            base::Unretained(&observer), 42, base::string16()));
   thread.Stop();
   base::MessageLoop::current()->RunUntilIdle();
   ASSERT_TRUE(network_delegate.got_pac_error());
@@ -107,16 +100,15 @@ TEST(NetworkDelegateErrorObserverTest, NoDelegate) {
   base::Thread thread("test_thread");
   thread.Start();
   NetworkDelegateErrorObserver observer(
-      NULL, base::MessageLoopProxy::current().get());
-  thread.message_loop()
-      ->PostTask(FROM_HERE,
-                 base::Bind(&NetworkDelegateErrorObserver::OnPACScriptError,
-                            base::Unretained(&observer),
-                            42,
-                            base::string16()));
+      NULL, base::ThreadTaskRunnerHandle::Get().get());
+  thread.task_runner()->PostTask(
+      FROM_HERE, base::Bind(&NetworkDelegateErrorObserver::OnPACScriptError,
+                            base::Unretained(&observer), 42, base::string16()));
   thread.Stop();
   base::MessageLoop::current()->RunUntilIdle();
   // Shouldn't have crashed until here...
 }
+
+}  // namespace
 
 }  // namespace net

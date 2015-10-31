@@ -39,7 +39,10 @@ void PrrSender::OnPacketAcked(QuicByteCount acked_bytes) {
 QuicTime::Delta PrrSender::TimeUntilSend(
     QuicByteCount congestion_window,
     QuicByteCount bytes_in_flight,
-    QuicPacketCount slowstart_threshold) const {
+    QuicByteCount slowstart_threshold) const {
+  //   if (FLAGS_?? && bytes_in_flight < congestion_window) {
+  //     return QuicTime::Delta::Zero();
+  //   }
   // Return QuicTime::Zero In order to ensure limited transmit always works.
   if (bytes_sent_since_loss_ == 0 || bytes_in_flight < kMaxSegmentSize) {
     return QuicTime::Delta::Zero();
@@ -50,7 +53,7 @@ QuicTime::Delta PrrSender::TimeUntilSend(
     // when more packets are lost than the CWND reduction.
     //   limit = MAX(prr_delivered - prr_out, DeliveredData) + MSS
     if (bytes_delivered_since_loss_ + ack_count_since_loss_ * kMaxSegmentSize <=
-            bytes_sent_since_loss_) {
+        bytes_sent_since_loss_) {
       return QuicTime::Delta::Infinite();
     }
     return QuicTime::Delta::Zero();
@@ -59,8 +62,8 @@ QuicTime::Delta PrrSender::TimeUntilSend(
   // Checks a simplified version of the PRR formula that doesn't use division:
   // AvailableSendWindow =
   //   CEIL(prr_delivered * ssthresh / BytesInFlightAtLoss) - prr_sent
-  if (bytes_delivered_since_loss_ * slowstart_threshold * kMaxSegmentSize >
-          bytes_sent_since_loss_ * bytes_in_flight_before_loss_) {
+  if (bytes_delivered_since_loss_ * slowstart_threshold >
+      bytes_sent_since_loss_ * bytes_in_flight_before_loss_) {
     return QuicTime::Delta::Zero();
   }
   return QuicTime::Delta::Infinite();

@@ -6,7 +6,7 @@
 
 #include "base/atomicops.h"
 #include "base/files/file_path.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/thread_checker.h"
@@ -656,11 +656,11 @@ bool BlockFiles::FixBlockFileHeader(MappedFile* file) {
   if (file_size < file_header.Size())
     return false;  // file_size > 2GB is also an error.
 
-  const int kMinBlockSize = 36;
-  const int kMaxBlockSize = 4096;
+  const int kMinHeaderBlockSize = 36;
+  const int kMaxHeaderBlockSize = 4096;
   BlockFileHeader* header = file_header.Header();
-  if (header->entry_size < kMinBlockSize ||
-      header->entry_size > kMaxBlockSize || header->num_entries < 0)
+  if (header->entry_size < kMinHeaderBlockSize ||
+      header->entry_size > kMaxHeaderBlockSize || header->num_entries < 0)
     return false;
 
   // Make sure that we survive crashes.

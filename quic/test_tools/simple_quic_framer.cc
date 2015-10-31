@@ -5,7 +5,6 @@
 #include "net/quic/test_tools/simple_quic_framer.h"
 
 #include "base/stl_util.h"
-#include "net/quic/crypto/crypto_framer.h"
 #include "net/quic/crypto/quic_decrypter.h"
 #include "net/quic/crypto/quic_encrypter.h"
 
@@ -57,12 +56,12 @@ class SimpleFramerVisitor : public QuicFramerVisitorInterface {
 
   bool OnStreamFrame(const QuicStreamFrame& frame) override {
     // Save a copy of the data so it is valid after the packet is processed.
-    stream_data_.push_back(frame.GetDataAsString());
+    string* string_data = new string();
+    frame.data.AppendToString(string_data);
+    stream_data_.push_back(string_data);
     QuicStreamFrame stream_frame(frame);
     // Make sure that the stream frame points to this data.
-    stream_frame.data.Clear();
-    stream_frame.data.Append(const_cast<char*>(stream_data_.back()->data()),
-                             stream_data_.back()->size());
+    stream_frame.data = StringPiece(*string_data);
     stream_frames_.push_back(stream_frame);
     return true;
   }
@@ -141,9 +140,6 @@ class SimpleFramerVisitor : public QuicFramerVisitorInterface {
   const QuicVersionNegotiationPacket* version_negotiation_packet() const {
     return version_negotiation_packet_.get();
   }
-  const QuicPublicResetPacket* public_reset_packet() const {
-    return public_reset_packet_.get();
-  }
 
  private:
   QuicErrorCode error_;
@@ -168,20 +164,16 @@ class SimpleFramerVisitor : public QuicFramerVisitorInterface {
 };
 
 SimpleQuicFramer::SimpleQuicFramer()
-    : framer_(QuicSupportedVersions(), QuicTime::Zero(), true) {
+    : framer_(QuicSupportedVersions(),
+              QuicTime::Zero(),
+              Perspective::IS_SERVER) {
 }
 
 SimpleQuicFramer::SimpleQuicFramer(const QuicVersionVector& supported_versions)
-    : framer_(supported_versions, QuicTime::Zero(), true) {
+    : framer_(supported_versions, QuicTime::Zero(), Perspective::IS_SERVER) {
 }
 
 SimpleQuicFramer::~SimpleQuicFramer() {
-}
-
-bool SimpleQuicFramer::ProcessPacket(const QuicPacket& packet) {
-  scoped_ptr<QuicEncryptedPacket> encrypted(framer_.EncryptPacket(
-      ENCRYPTION_NONE, 0, packet));
-  return ProcessPacket(*encrypted);
 }
 
 bool SimpleQuicFramer::ProcessPacket(const QuicEncryptedPacket& packet) {
@@ -206,10 +198,6 @@ const QuicFecData& SimpleQuicFramer::fec_data() const {
 const QuicVersionNegotiationPacket*
 SimpleQuicFramer::version_negotiation_packet() const {
   return visitor_->version_negotiation_packet();
-}
-
-const QuicPublicResetPacket* SimpleQuicFramer::public_reset_packet() const {
-  return visitor_->public_reset_packet();
 }
 
 QuicFramer* SimpleQuicFramer::framer() {

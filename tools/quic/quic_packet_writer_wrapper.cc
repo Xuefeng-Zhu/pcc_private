@@ -19,8 +19,8 @@ QuicPacketWriterWrapper::~QuicPacketWriterWrapper() {}
 WriteResult QuicPacketWriterWrapper::WritePacket(
     const char* buffer,
     size_t buf_len,
-    const net::IPAddressNumber& self_address,
-    const net::IPEndPoint& peer_address) {
+    const IPAddressNumber& self_address,
+    const IPEndPoint& peer_address) {
   return writer_->WritePacket(buffer, buf_len, self_address, peer_address);
 }
 
@@ -36,12 +36,13 @@ void QuicPacketWriterWrapper::SetWritable() {
   writer_->SetWritable();
 }
 
-void QuicPacketWriterWrapper::set_writer(QuicPacketWriter* writer) {
-  writer_.reset(writer);
+QuicByteCount QuicPacketWriterWrapper::GetMaxPacketSize(
+    const IPEndPoint& peer_address) const {
+  return writer_->GetMaxPacketSize(peer_address);
 }
 
-QuicPacketWriter* QuicPacketWriterWrapper::release_writer() {
-  return writer_.release();
+void QuicPacketWriterWrapper::set_writer(QuicPacketWriter* writer) {
+  writer_.reset(writer);
 }
 
 }  // namespace tools

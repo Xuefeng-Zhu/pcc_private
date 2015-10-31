@@ -48,10 +48,10 @@ class SpdySessionPoolTest : public ::testing::Test,
   SpdySessionPool* spdy_session_pool_;
 };
 
-INSTANTIATE_TEST_CASE_P(
-    NextProto,
-    SpdySessionPoolTest,
-    testing::Values(kProtoSPDY31, kProtoSPDY4_14, kProtoSPDY4_15));
+INSTANTIATE_TEST_CASE_P(NextProto,
+                        SpdySessionPoolTest,
+                        testing::Values(kProtoSPDY31,
+                                        kProtoHTTP2));
 
 // A delegate that opens a new session when it is closed.
 class SessionOpeningDelegate : public SpdyStream::Delegate {
@@ -73,6 +73,8 @@ class SessionOpeningDelegate : public SpdyStream::Delegate {
   void OnDataReceived(scoped_ptr<SpdyBuffer> buffer) override {}
 
   void OnDataSent() override {}
+
+  void OnTrailers(const SpdyHeaderBlock& trailers) override {}
 
   void OnClose(int status) override {
     ignore_result(CreateFakeSpdySession(spdy_session_pool_, key_));
@@ -130,7 +132,7 @@ TEST_P(SpdySessionPoolTest, CloseCurrentSessions) {
   spdy_stream->SetDelegate(&delegate);
 
   // Close the current session.
-  spdy_session_pool_->CloseCurrentSessions(net::ERR_ABORTED);
+  spdy_session_pool_->CloseCurrentSessions(ERR_ABORTED);
 
   EXPECT_TRUE(HasSpdySession(spdy_session_pool_, test_key));
 }
@@ -519,7 +521,8 @@ TEST_P(SpdySessionPoolTest, IPAddressChanged) {
       spdy_util.ConstructSpdyGet("http://www.a.com", false, 1, MEDIUM));
   MockWrite writes[] = {CreateMockWrite(*req, 1)};
 
-  DelayedSocketData data(1, reads, arraysize(reads), writes, arraysize(writes));
+  StaticSocketDataProvider data(reads, arraysize(reads), writes,
+                                arraysize(writes));
   data.set_connect_data(connect_data);
   session_deps_.socket_factory->AddSocketDataProvider(&data);
 

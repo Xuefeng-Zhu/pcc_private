@@ -4,15 +4,15 @@
 
 #include "net/quic/congestion_control/cubic.h"
 
+#include <stdint.h>
 #include <algorithm>
 #include <cmath>
 
 #include "base/basictypes.h"
 #include "base/logging.h"
-#include "base/time/time.h"
-#include "net/quic/congestion_control/cube_root.h"
 #include "net/quic/quic_flags.h"
 #include "net/quic/quic_protocol.h"
+#include "net/quic/quic_time.h"
 
 using std::max;
 
@@ -27,7 +27,7 @@ const int kCubeScale = 40;  // 1024*1024^3 (first 1024 is from 0.100^3)
                             // where 0.100 is 100 ms which is the scaling
                             // round trip time.
 const int kCubeCongestionWindowScale = 410;
-const uint64 kCubeFactor = (GG_UINT64_C(1) << kCubeScale) /
+const uint64 kCubeFactor = (UINT64_C(1) << kCubeScale) /
     kCubeCongestionWindowScale;
 
 const uint32 kDefaultNumConnections = 2;
@@ -39,12 +39,11 @@ const float kBetaLastMax = 0.85f;
 
 }  // namespace
 
-Cubic::Cubic(const QuicClock* clock, QuicConnectionStats* stats)
+Cubic::Cubic(const QuicClock* clock)
     : clock_(clock),
       num_connections_(kDefaultNumConnections),
       epoch_(QuicTime::Zero()),
-      last_update_time_(QuicTime::Zero()),
-      stats_(stats) {
+      last_update_time_(QuicTime::Zero()) {
   Reset();
 }
 
@@ -80,20 +79,16 @@ void Cubic::Reset() {
   last_target_congestion_window_ = 0;
 }
 
-void Cubic::UpdateCongestionControlStats(QuicPacketCount new_cubic_mode_cwnd,
-                                         QuicPacketCount new_reno_mode_cwnd) {
-  QuicPacketCount highest_new_cwnd = max(new_cubic_mode_cwnd,
-                                         new_reno_mode_cwnd);
-  if (last_congestion_window_ < highest_new_cwnd) {
-    // cwnd will increase to highest_new_cwnd.
-    stats_->cwnd_increase_congestion_avoidance +=
-        highest_new_cwnd - last_congestion_window_;
-    if (new_cubic_mode_cwnd > new_reno_mode_cwnd) {
-      // This cwnd increase is due to cubic mode.
-      stats_->cwnd_increase_cubic_mode +=
-          new_cubic_mode_cwnd - last_congestion_window_;
-    }
-  }
+void Cubic::OnApplicationLimited() {
+  // When sender is not using the available congestion window, the window does
+  // not grow. But to be RTT-independent, Cubic assumes that the sender has been
+  // using the entire window during the time since the beginning of the current
+  // "epoch" (the end of the last loss recovery period). Since
+  // application-limited periods break this assumption, we reset the epoch when
+  // in such a period. This reset effectively freezes congestion window growth
+  // through application-limited periods and allows Cubic growth to continue
+  // when the entire window is being used.
+  epoch_ = QuicTime::Zero();
 }
 
 QuicPacketCount Cubic::CongestionWindowAfterPacketLoss(
@@ -136,19 +131,10 @@ QuicPacketCount Cubic::CongestionWindowAfterAck(
       time_to_origin_point_ = 0;
       origin_point_congestion_window_ = current_congestion_window;
     } else {
-      if (FLAGS_quic_use_std_cbrt) {
-        time_to_origin_point_ = static_cast<uint32>(
-            cbrt(kCubeFactor *
-                 (last_max_congestion_window_ - current_congestion_window)));
-      } else {
-        // TODO(rjshade): Remove CubeRoot source when removing
-        // FLAGS_quic_use_std_cbrt.
-        time_to_origin_point_ =
-            CubeRoot::Root(kCubeFactor * (last_max_congestion_window_ -
-                                          current_congestion_window));
-      }
-      origin_point_congestion_window_ =
-          last_max_congestion_window_;
+      time_to_origin_point_ =
+          static_cast<uint32>(cbrt(kCubeFactor * (last_max_congestion_window_ -
+                                                  current_congestion_window)));
+      origin_point_congestion_window_ = last_max_congestion_window_;
     }
   }
   // Change the time unit from microseconds to 2^10 fractions per second. Take
@@ -156,7 +142,7 @@ QuicPacketCount Cubic::CongestionWindowAfterAck(
   // divide operator.
   int64 elapsed_time =
       (current_time.Add(delay_min).Subtract(epoch_).ToMicroseconds() << 10) /
-      base::Time::kMicrosecondsPerSecond;
+      kNumMicrosPerSecond;
 
   int64 offset = time_to_origin_point_ - elapsed_time;
   QuicPacketCount delta_congestion_window = (kCubeCongestionWindowScale
@@ -180,10 +166,6 @@ QuicPacketCount Cubic::CongestionWindowAfterAck(
     estimated_tcp_congestion_window_++;
   }
 
-  // Update cubic mode and reno mode stats in QuicConnectionStats.
-  UpdateCongestionControlStats(target_congestion_window,
-                               estimated_tcp_congestion_window_);
-
   // We have a new cubic congestion window.
   last_target_congestion_window_ = target_congestion_window;
 
@@ -193,7 +175,7 @@ QuicPacketCount Cubic::CongestionWindowAfterAck(
     target_congestion_window = estimated_tcp_congestion_window_;
   }
 
-  DVLOG(1) << "Target congestion_window: " << target_congestion_window;
+  DVLOG(1) << "Final target congestion_window: " << target_congestion_window;
   return target_congestion_window;
 }
 

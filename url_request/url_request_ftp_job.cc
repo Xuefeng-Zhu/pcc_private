@@ -5,9 +5,10 @@
 #include "net/url_request/url_request_ftp_job.h"
 
 #include "base/compiler_specific.h"
-#include "base/message_loop/message_loop.h"
-#include "base/profiler/scoped_tracker.h"
+#include "base/location.h"
+#include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/thread_task_runner_handle.h"
 #include "net/base/auth.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/load_flags.h"
@@ -240,10 +241,9 @@ void URLRequestFtpJob::OnStartCompleted(int result) {
 }
 
 void URLRequestFtpJob::OnStartCompletedAsync(int result) {
-  base::MessageLoop::current()->PostTask(
-      FROM_HERE,
-      base::Bind(&URLRequestFtpJob::OnStartCompleted,
-                 weak_factory_.GetWeakPtr(), result));
+  base::ThreadTaskRunnerHandle::Get()->PostTask(
+      FROM_HERE, base::Bind(&URLRequestFtpJob::OnStartCompleted,
+                            weak_factory_.GetWeakPtr(), result));
 }
 
 void URLRequestFtpJob::OnReadCompleted(int result) {
@@ -350,10 +350,6 @@ UploadProgress URLRequestFtpJob::GetUploadProgress() const {
 bool URLRequestFtpJob::ReadRawData(IOBuffer* buf,
                                    int buf_size,
                                    int *bytes_read) {
-  // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is fixed.
-  tracked_objects::ScopedTracker tracking_profile(
-      FROM_HERE_WITH_EXPLICIT_FUNCTION("423948 URLRequestFtpJob::ReadRawData"));
-
   DCHECK_NE(buf_size, 0);
   DCHECK(bytes_read);
   DCHECK(!read_in_progress_);

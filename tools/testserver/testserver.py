@@ -157,7 +157,9 @@ class HTTPSServer(tlslite.api.TLSSocketServerMixIn,
                ssl_bulk_ciphers, ssl_key_exchanges, enable_npn,
                record_resume_info, tls_intolerant,
                tls_intolerance_type, signed_cert_timestamps,
-               fallback_scsv_enabled, ocsp_response, disable_session_cache):
+               fallback_scsv_enabled, ocsp_response,
+               alert_after_handshake, disable_channel_id, disable_ems,
+               token_binding_params):
     self.cert_chain = tlslite.api.X509CertChain()
     self.cert_chain.parsePemList(pem_cert_and_key)
     # Force using only python implementation - otherwise behavior is different
@@ -188,7 +190,6 @@ class HTTPSServer(tlslite.api.TLSSocketServerMixIn,
       for cert_type in ssl_client_cert_types:
         self.ssl_client_cert_types.append({
             "rsa_sign": tlslite.api.ClientCertificateType.rsa_sign,
-            "dss_sign": tlslite.api.ClientCertificateType.dss_sign,
             "ecdsa_sign": tlslite.api.ClientCertificateType.ecdsa_sign,
             }[cert_type])
 
@@ -202,11 +203,16 @@ class HTTPSServer(tlslite.api.TLSSocketServerMixIn,
     if tls_intolerant != 0:
       self.ssl_handshake_settings.tlsIntolerant = (3, tls_intolerant)
       self.ssl_handshake_settings.tlsIntoleranceType = tls_intolerance_type
+    if alert_after_handshake:
+      self.ssl_handshake_settings.alertAfterHandshake = True
+    if disable_channel_id:
+      self.ssl_handshake_settings.enableChannelID = False
+    if disable_ems:
+      self.ssl_handshake_settings.enableExtendedMasterSecret = False
+    self.ssl_handshake_settings.supportedTokenBindingParams = \
+        token_binding_params
 
-
-    if disable_session_cache:
-      self.session_cache = None
-    elif record_resume_info:
+    if record_resume_info:
       # If record_resume_info is true then we'll replace the session cache with
       # an object that records the lookups and inserts that it sees.
       self.session_cache = RecordingSSLSessionCache()
@@ -330,7 +336,6 @@ class TestPageHandler(testserver_base.BasePageHandler):
       self.AuthDigestHandler,
       self.SlowServerHandler,
       self.ChunkedServerHandler,
-      self.ContentTypeHandler,
       self.NoContentHandler,
       self.ServerRedirectHandler,
       self.CrossSiteRedirectHandler,
@@ -338,6 +343,7 @@ class TestPageHandler(testserver_base.BasePageHandler):
       self.GetSSLSessionCacheHandler,
       self.SSLManySmallRecords,
       self.GetChannelID,
+      self.GetClientCert,
       self.ClientCipherListHandler,
       self.CloseSocketHandler,
       self.RangeResetHandler,
@@ -473,7 +479,7 @@ class TestPageHandler(testserver_base.BasePageHandler):
 
   def CachePrivateHandler(self):
     """This request handler yields a page with the title set to the current
-    system time, and allows caching for 5 seconds."""
+    system time, and allows caching for 3 seconds."""
 
     if not self._ShouldHandleRequest("/cache/private"):
       return False
@@ -490,7 +496,7 @@ class TestPageHandler(testserver_base.BasePageHandler):
 
   def CachePublicHandler(self):
     """This request handler yields a page with the title set to the current
-    system time, and allows caching for 5 seconds."""
+    system time, and allows caching for 3 seconds."""
 
     if not self._ShouldHandleRequest("/cache/public"):
       return False
@@ -1325,14 +1331,14 @@ class TestPageHandler(testserver_base.BasePageHandler):
     wait_sec = 1.0
     if query_char >= 0:
       try:
-        wait_sec = int(self.path[query_char + 1:])
+        wait_sec = float(self.path[query_char + 1:])
       except ValueError:
         pass
     time.sleep(wait_sec)
     self.send_response(200)
     self.send_header('Content-Type', 'text/plain')
     self.end_headers()
-    self.wfile.write("waited %d seconds" % wait_sec)
+    self.wfile.write("waited %.1f seconds" % wait_sec)
     return True
 
   def ChunkedServerHandler(self):
@@ -1375,23 +1381,6 @@ class TestPageHandler(testserver_base.BasePageHandler):
       self.sendChunkHelp('*' * chunkedSettings['chunkSize'])
       self.wfile.flush() # Keep in mind that we start flushing only after 1kb.
     self.sendChunkHelp('')
-    return True
-
-  def ContentTypeHandler(self):
-    """Returns a string of html with the given content type.  E.g.,
-    /contenttype?text/css returns an html file with the Content-Type
-    header set to text/css."""
-
-    if not self._ShouldHandleRequest("/contenttype"):
-      return False
-    query_char = self.path.find('?')
-    content_type = self.path[query_char + 1:].strip()
-    if not content_type:
-      content_type = 'text/html'
-    self.send_response(200)
-    self.send_header('Content-Type', content_type)
-    self.end_headers()
-    self.wfile.write("<html>\n<body>\n<p>HTML text</p>\n</body>\n</html>\n")
     return True
 
   def NoContentHandler(self):
@@ -1529,6 +1518,24 @@ class TestPageHandler(testserver_base.BasePageHandler):
     self.end_headers()
     channel_id = bytes(self.server.tlsConnection.channel_id)
     self.wfile.write(hashlib.sha256(channel_id).digest().encode('base64'))
+    return True
+
+  def GetClientCert(self):
+    """Send a reply whether a client certificate was provided."""
+
+    if not self._ShouldHandleRequest('/client-cert'):
+      return False
+
+    self.send_response(200)
+    self.send_header('Content-Type', 'text/plain')
+    self.end_headers()
+
+    cert_chain = self.server.tlsConnection.session.clientCertChain
+    if cert_chain != None:
+      self.wfile.write('got client cert with fingerprint: ' +
+                       cert_chain.getFingerprint())
+    else:
+      self.wfile.write('got no client cert')
     return True
 
   def ClientCipherListHandler(self):
@@ -1980,6 +1987,14 @@ class ServerRunner(testserver_base.TestServerRunner):
     port = self.options.port
     host = self.options.host
 
+    # Work around a bug in Mac OS 10.6. Spawning a WebSockets server
+    # will result in a call to |getaddrinfo|, which fails with "nodename
+    # nor servname provided" for localhost:0 on 10.6.
+    if self.options.server_type == SERVER_WEBSOCKET and \
+       host == "localhost" and \
+       port == 0:
+      host = "127.0.0.1"
+
     if self.options.server_type == SERVER_HTTP:
       if self.options.https:
         pem_cert_and_key = None
@@ -2049,7 +2064,10 @@ class ServerRunner(testserver_base.TestServerRunner):
                                  "base64"),
                              self.options.fallback_scsv,
                              stapled_ocsp_response,
-                             self.options.disable_session_cache)
+                             self.options.alert_after_handshake,
+                             self.options.disable_channel_id,
+                             self.options.disable_extended_master_secret,
+                             self.options.token_binding_params)
         print 'HTTPS server started on https://%s:%d...' % \
             (host, server.server_port)
       else:
@@ -2085,6 +2103,8 @@ class ServerRunner(testserver_base.TestServerRunner):
               'specified trusted client CA file not found: ' +
               self.options.ssl_client_ca[0] + ' exiting...')
         websocket_options.tls_client_ca = self.options.ssl_client_ca[0]
+      print 'Trying to start websocket server on %s://%s:%d...' % \
+          (scheme, websocket_options.server_host, websocket_options.port)
       server = WebSocketServer(websocket_options)
       print 'WebSocket server started on %s://%s:%d...' % \
           (scheme, host, server.server_port)
@@ -2114,11 +2134,12 @@ class ServerRunner(testserver_base.TestServerRunner):
       # Instantiate a dummy authorizer for managing 'virtual' users
       authorizer = pyftpdlib.ftpserver.DummyAuthorizer()
 
-      # Define a new user having full r/w permissions and a read-only
-      # anonymous user
+      # Define a new user having full r/w permissions
       authorizer.add_user('chrome', 'chrome', my_data_dir, perm='elradfmw')
 
-      authorizer.add_anonymous(my_data_dir)
+      # Define a read-only anonymous user unless disabled
+      if not self.options.no_anonymous_ftp_user:
+        authorizer.add_anonymous(my_data_dir)
 
       # Instantiate FTP handler class
       ftp_handler = pyftpdlib.ftpserver.FTPHandler
@@ -2149,11 +2170,6 @@ class ServerRunner(testserver_base.TestServerRunner):
 
   def add_options(self):
     testserver_base.TestServerRunner.add_options(self)
-    self.option_parser.add_option('--disable-session-cache',
-                                  action='store_true',
-                                  dest='disable_session_cache',
-                                  help='tells the server to disable the'
-                                  'TLS session cache.')
     self.option_parser.add_option('-f', '--ftp', action='store_const',
                                   const=SERVER_FTP, default=SERVER_HTTP,
                                   dest='server_type',
@@ -2254,19 +2270,20 @@ class ServerRunner(testserver_base.TestServerRunner):
     self.option_parser.add_option('--ssl-bulk-cipher', action='append',
                                   help='Specify the bulk encryption '
                                   'algorithm(s) that will be accepted by the '
-                                  'SSL server. Valid values are "aes256", '
-                                  '"aes128", "3des", "rc4". If omitted, all '
-                                  'algorithms will be used. This option may '
-                                  'appear multiple times, indicating '
-                                  'multiple algorithms should be enabled.');
-    self.option_parser.add_option('--ssl-key-exchange', action='append',
-                                  help='Specify the key exchange algorithm(s)'
-                                  'that will be accepted by the SSL server. '
-                                  'Valid values are "rsa", "dhe_rsa". If '
+                                  'SSL server. Valid values are "aes128gcm", '
+                                  '"aes256", "aes128", "3des", "rc4". If '
                                   'omitted, all algorithms will be used. This '
                                   'option may appear multiple times, '
                                   'indicating multiple algorithms should be '
                                   'enabled.');
+    self.option_parser.add_option('--ssl-key-exchange', action='append',
+                                  help='Specify the key exchange algorithm(s)'
+                                  'that will be accepted by the SSL server. '
+                                  'Valid values are "rsa", "dhe_rsa", '
+                                  '"ecdhe_rsa". If omitted, all algorithms '
+                                  'will be used. This option may appear '
+                                  'multiple times, indicating multiple '
+                                  'algorithms should be enabled.');
     # TODO(davidben): Add ALPN support to tlslite.
     self.option_parser.add_option('--enable-npn', dest='enable_npn',
                                   default=False, const=True,
@@ -2286,6 +2303,21 @@ class ServerRunner(testserver_base.TestServerRunner):
                                   help='If set, the OCSP server will return '
                                   'a tryLater status rather than the actual '
                                   'OCSP response.')
+    self.option_parser.add_option('--alert-after-handshake',
+                                  dest='alert_after_handshake',
+                                  default=False, action='store_true',
+                                  help='If set, the server will send a fatal '
+                                  'alert immediately after the handshake.')
+    self.option_parser.add_option('--no-anonymous-ftp-user',
+                                  dest='no_anonymous_ftp_user',
+                                  default=False, action='store_true',
+                                  help='If set, the FTP server will not create '
+                                  'an anonymous user.')
+    self.option_parser.add_option('--disable-channel-id', action='store_true')
+    self.option_parser.add_option('--disable-extended-master-secret',
+                                  action='store_true')
+    self.option_parser.add_option('--token-binding-params', action='append',
+                                  default=[], type='int')
 
 
 if __name__ == '__main__':

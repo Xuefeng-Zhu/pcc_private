@@ -10,15 +10,16 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/hash.h"
-#include "base/message_loop/message_loop.h"
+#include "base/location.h"
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram.h"
-#include "base/metrics/stats_counters.h"
 #include "base/rand_util.h"
 #include "base/single_thread_task_runner.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/sys_info.h"
+#include "base/thread_task_runner_handle.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/time/time.h"
 #include "base/timer/timer.h"
@@ -293,7 +294,7 @@ int BackendImpl::SyncInit() {
   if (!disabled_ && should_create_timer) {
     // Create a recurrent timer of 30 secs.
     int timer_delay = unit_test_ ? 1000 : 30000;
-    timer_.reset(new base::RepeatingTimer<BackendImpl>());
+    timer_.reset(new base::RepeatingTimer());
     timer_->Start(FROM_HERE, TimeDelta::FromMilliseconds(timer_delay), this,
                   &BackendImpl::OnStatsTimer);
   }
@@ -354,6 +355,9 @@ int BackendImpl::SyncDoomEntry(const std::string& key) {
 }
 
 int BackendImpl::SyncDoomAllEntries() {
+  if (disabled_)
+    return net::ERR_FAILED;
+
   // This is not really an error, but it is an interesting condition.
   ReportError(ERR_CACHE_DOOMED);
   stats_.OnEvent(Stats::DOOM_CACHE);
@@ -505,7 +509,6 @@ EntryImpl* BackendImpl::OpenEntryImpl(const std::string& key) {
             static_cast<base::HistogramBase::Sample>(use_hours));
   stats_.OnEvent(Stats::OPEN_HIT);
   web_fonts_histogram::RecordCacheHit(cache_entry);
-  SIMPLE_STATS_COUNTER("disk_cache.hit");
   return cache_entry;
 }
 
@@ -601,7 +604,6 @@ EntryImpl* BackendImpl::CreateEntryImpl(const std::string& key) {
 
   CACHE_UMA(AGE_MS, "CreateTime", 0, start);
   stats_.OnEvent(Stats::CREATE_HIT);
-  SIMPLE_STATS_COUNTER("disk_cache.miss");
   Trace("create entry hit ");
   FlushIndex();
   cache_entry->AddRef();
@@ -1032,7 +1034,7 @@ void BackendImpl::CriticalError(int error) {
   disabled_ = true;
 
   if (!num_refs_)
-    base::MessageLoop::current()->PostTask(
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
         FROM_HERE, base::Bind(&BackendImpl::RestartCache, GetWeakPtr(), true));
 }
 
@@ -1156,7 +1158,7 @@ void BackendImpl::TrimDeletedListForTest(bool empty) {
   eviction_.TrimDeletedList(empty);
 }
 
-base::RepeatingTimer<BackendImpl>* BackendImpl::GetTimerForTest() {
+base::RepeatingTimer* BackendImpl::GetTimerForTest() {
   return timer_.get();
 }
 
@@ -1288,19 +1290,19 @@ void BackendImpl::GetStats(StatsItems* stats) {
   std::pair<std::string, std::string> item;
 
   item.first = "Entries";
-  item.second = base::StringPrintf("%d", data_->header.num_entries);
+  item.second = base::IntToString(data_->header.num_entries);
   stats->push_back(item);
 
   item.first = "Pending IO";
-  item.second = base::StringPrintf("%d", num_pending_io_);
+  item.second = base::IntToString(num_pending_io_);
   stats->push_back(item);
 
   item.first = "Max size";
-  item.second = base::StringPrintf("%d", max_size_);
+  item.second = base::IntToString(max_size_);
   stats->push_back(item);
 
   item.first = "Current size";
-  item.second = base::StringPrintf("%d", data_->header.num_bytes);
+  item.second = base::IntToString(data_->header.num_bytes);
   stats->push_back(item);
 
   item.first = "Cache type";
@@ -1684,7 +1686,11 @@ EntryImpl* BackendImpl::MatchEntry(const std::string& key, uint32 hash,
   if (cache_entry.get() && (find_parent || !found))
     cache_entry = NULL;
 
-  find_parent ? parent_entry.swap(&tmp) : cache_entry.swap(&tmp);
+  if (find_parent)
+    parent_entry.swap(&tmp);
+  else
+    cache_entry.swap(&tmp);
+
   FlushIndex();
   return tmp;
 }
@@ -1809,7 +1815,7 @@ void BackendImpl::DecreaseNumRefs() {
   num_refs_--;
 
   if (!num_refs_ && disabled_)
-    base::MessageLoop::current()->PostTask(
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
         FROM_HERE, base::Bind(&BackendImpl::RestartCache, GetWeakPtr(), true));
 }
 

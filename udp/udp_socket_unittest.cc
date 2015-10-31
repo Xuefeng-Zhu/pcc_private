@@ -9,14 +9,20 @@
 
 #include "base/basictypes.h"
 #include "base/bind.h"
-#include "base/metrics/histogram.h"
+#include "base/location.h"
+#include "base/memory/weak_ptr.h"
+#include "base/run_loop.h"
+#include "base/single_thread_task_runner.h"
 #include "base/stl_util.h"
+#include "base/thread_task_runner_handle.h"
 #include "net/base/io_buffer.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
-#include "net/base/net_log_unittest.h"
 #include "net/base/net_util.h"
 #include "net/base/test_completion_callback.h"
+#include "net/log/test_net_log.h"
+#include "net/log/test_net_log_entry.h"
+#include "net/log/test_net_log_util.h"
 #include "net/test/net_test_suite.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/platform_test.h"
@@ -27,9 +33,7 @@ namespace {
 
 class UDPSocketTest : public PlatformTest {
  public:
-  UDPSocketTest()
-      : buffer_(new IOBufferWithSize(kMaxRead)) {
-  }
+  UDPSocketTest() : buffer_(new IOBufferWithSize(kMaxRead)) {}
 
   // Blocks until data is read from the socket.
   std::string RecvFromSocket(UDPServerSocket* socket) {
@@ -49,7 +53,7 @@ class UDPSocketTest : public PlatformTest {
   // If |address| is specified, then it is used for the destination
   // to send to. Otherwise, will send to the last socket this server
   // received from.
-  int SendToSocket(UDPServerSocket* socket, std::string msg) {
+  int SendToSocket(UDPServerSocket* socket, const std::string& msg) {
     return SendToSocket(socket, msg, recv_from_address_);
   }
 
@@ -90,7 +94,7 @@ class UDPSocketTest : public PlatformTest {
 
   // Loop until |msg| has been written to the socket or until an
   // error occurs.
-  int WriteSocket(UDPClientSocket* socket, std::string msg) {
+  int WriteSocket(UDPClientSocket* socket, const std::string& msg) {
     TestCompletionCallback callback;
 
     int length = msg.length();
@@ -112,31 +116,52 @@ class UDPSocketTest : public PlatformTest {
     return bytes_sent;
   }
 
+  void WriteSocketIgnoreResult(UDPClientSocket* socket,
+                               const std::string& msg) {
+    WriteSocket(socket, msg);
+  }
+
+  // Creates an address from ip address and port and writes it to |*address|.
+  void CreateUDPAddress(const std::string& ip_str,
+                        uint16 port,
+                        IPEndPoint* address) {
+    IPAddressNumber ip_number;
+    bool rv = ParseIPLiteralToNumber(ip_str, &ip_number);
+    if (!rv)
+      return;
+    *address = IPEndPoint(ip_number, port);
+  }
+
+  // Run unit test for a connection test.
+  // |use_nonblocking_io| is used to switch between overlapped and non-blocking
+  // IO on Windows. It has no effect in other ports.
+  void ConnectTest(bool use_nonblocking_io);
+
  protected:
   static const int kMaxRead = 1024;
   scoped_refptr<IOBufferWithSize> buffer_;
   IPEndPoint recv_from_address_;
 };
 
-// Creates and address from an ip/port and returns it in |address|.
-void CreateUDPAddress(std::string ip_str, uint16 port, IPEndPoint* address) {
-  IPAddressNumber ip_number;
-  bool rv = ParseIPLiteralToNumber(ip_str, &ip_number);
-  if (!rv)
-    return;
-  *address = IPEndPoint(ip_number, port);
+void ReadCompleteCallback(int* result_out, base::Closure callback, int result) {
+  *result_out = result;
+  callback.Run();
 }
 
-TEST_F(UDPSocketTest, Connect) {
+void UDPSocketTest::ConnectTest(bool use_nonblocking_io) {
   const uint16 kPort = 9999;
   std::string simple_message("hello world!");
 
   // Setup the server to listen.
   IPEndPoint bind_address;
   CreateUDPAddress("127.0.0.1", kPort, &bind_address);
-  CapturingNetLog server_log;
+  TestNetLog server_log;
   scoped_ptr<UDPServerSocket> server(
       new UDPServerSocket(&server_log, NetLog::Source()));
+#if defined(OS_WIN)
+  if (use_nonblocking_io)
+    server->UseNonBlockingIO();
+#endif
   server->AllowAddressReuse();
   int rv = server->Listen(bind_address);
   ASSERT_EQ(OK, rv);
@@ -144,12 +169,15 @@ TEST_F(UDPSocketTest, Connect) {
   // Setup the client.
   IPEndPoint server_address;
   CreateUDPAddress("127.0.0.1", kPort, &server_address);
-  CapturingNetLog client_log;
+  TestNetLog client_log;
   scoped_ptr<UDPClientSocket> client(
-      new UDPClientSocket(DatagramSocket::DEFAULT_BIND,
-                          RandIntCallback(),
-                          &client_log,
-                          NetLog::Source()));
+      new UDPClientSocket(DatagramSocket::DEFAULT_BIND, RandIntCallback(),
+                          &client_log, NetLog::Source()));
+#if defined(OS_WIN)
+  if (use_nonblocking_io)
+    client->UseNonBlockingIO();
+#endif
+
   rv = client->Connect(server_address);
   EXPECT_EQ(OK, rv);
 
@@ -169,49 +197,80 @@ TEST_F(UDPSocketTest, Connect) {
   str = ReadSocket(client.get());
   DCHECK(simple_message == str);
 
+  // Test asynchronous read. Server waits for message.
+  base::RunLoop run_loop;
+  int read_result = 0;
+  rv = server->RecvFrom(
+      buffer_.get(), kMaxRead, &recv_from_address_,
+      base::Bind(&ReadCompleteCallback, &read_result, run_loop.QuitClosure()));
+  EXPECT_EQ(ERR_IO_PENDING, rv);
+
+  // Client sends to the server.
+  base::ThreadTaskRunnerHandle::Get()->PostTask(
+      FROM_HERE,
+      base::Bind(&UDPSocketTest::WriteSocketIgnoreResult,
+                 base::Unretained(this), client.get(), simple_message));
+  run_loop.Run();
+  EXPECT_EQ(simple_message.length(), static_cast<size_t>(read_result));
+  EXPECT_EQ(simple_message, std::string(buffer_->data(), read_result));
+
   // Delete sockets so they log their final events.
   server.reset();
   client.reset();
 
   // Check the server's log.
-  CapturingNetLog::CapturedEntryList server_entries;
+  TestNetLogEntry::List server_entries;
   server_log.GetEntries(&server_entries);
-  EXPECT_EQ(4u, server_entries.size());
-  EXPECT_TRUE(LogContainsBeginEvent(
-      server_entries, 0, NetLog::TYPE_SOCKET_ALIVE));
+  EXPECT_EQ(5u, server_entries.size());
+  EXPECT_TRUE(
+      LogContainsBeginEvent(server_entries, 0, NetLog::TYPE_SOCKET_ALIVE));
   EXPECT_TRUE(LogContainsEvent(
       server_entries, 1, NetLog::TYPE_UDP_BYTES_RECEIVED, NetLog::PHASE_NONE));
+  EXPECT_TRUE(LogContainsEvent(server_entries, 2, NetLog::TYPE_UDP_BYTES_SENT,
+                               NetLog::PHASE_NONE));
   EXPECT_TRUE(LogContainsEvent(
-      server_entries, 2, NetLog::TYPE_UDP_BYTES_SENT, NetLog::PHASE_NONE));
-  EXPECT_TRUE(LogContainsEndEvent(
-      server_entries, 3, NetLog::TYPE_SOCKET_ALIVE));
+      server_entries, 3, NetLog::TYPE_UDP_BYTES_RECEIVED, NetLog::PHASE_NONE));
+  EXPECT_TRUE(
+      LogContainsEndEvent(server_entries, 4, NetLog::TYPE_SOCKET_ALIVE));
 
   // Check the client's log.
-  CapturingNetLog::CapturedEntryList client_entries;
+  TestNetLogEntry::List client_entries;
   client_log.GetEntries(&client_entries);
-  EXPECT_EQ(6u, client_entries.size());
-  EXPECT_TRUE(LogContainsBeginEvent(
-      client_entries, 0, NetLog::TYPE_SOCKET_ALIVE));
-  EXPECT_TRUE(LogContainsBeginEvent(
-      client_entries, 1, NetLog::TYPE_UDP_CONNECT));
-  EXPECT_TRUE(LogContainsEndEvent(
-      client_entries, 2, NetLog::TYPE_UDP_CONNECT));
-  EXPECT_TRUE(LogContainsEvent(
-      client_entries, 3, NetLog::TYPE_UDP_BYTES_SENT, NetLog::PHASE_NONE));
+  EXPECT_EQ(7u, client_entries.size());
+  EXPECT_TRUE(
+      LogContainsBeginEvent(client_entries, 0, NetLog::TYPE_SOCKET_ALIVE));
+  EXPECT_TRUE(
+      LogContainsBeginEvent(client_entries, 1, NetLog::TYPE_UDP_CONNECT));
+  EXPECT_TRUE(LogContainsEndEvent(client_entries, 2, NetLog::TYPE_UDP_CONNECT));
+  EXPECT_TRUE(LogContainsEvent(client_entries, 3, NetLog::TYPE_UDP_BYTES_SENT,
+                               NetLog::PHASE_NONE));
   EXPECT_TRUE(LogContainsEvent(
       client_entries, 4, NetLog::TYPE_UDP_BYTES_RECEIVED, NetLog::PHASE_NONE));
-  EXPECT_TRUE(LogContainsEndEvent(
-      client_entries, 5, NetLog::TYPE_SOCKET_ALIVE));
+  EXPECT_TRUE(LogContainsEvent(client_entries, 5, NetLog::TYPE_UDP_BYTES_SENT,
+                               NetLog::PHASE_NONE));
+  EXPECT_TRUE(
+      LogContainsEndEvent(client_entries, 6, NetLog::TYPE_SOCKET_ALIVE));
 }
+
+TEST_F(UDPSocketTest, Connect) {
+  // The variable |use_nonblocking_io| has no effect in non-Windows ports.
+  ConnectTest(false);
+}
+
+#if defined(OS_WIN)
+TEST_F(UDPSocketTest, ConnectNonBlocking) {
+  ConnectTest(true);
+}
+#endif
 
 #if defined(OS_MACOSX)
 // UDPSocketPrivate_Broadcast is disabled for OSX because it requires
 // root permissions on OSX 10.7+.
 TEST_F(UDPSocketTest, DISABLED_Broadcast) {
 #elif defined(OS_ANDROID)
-// It is also disabled for Android because it is extremely flaky.
-// The first call to SendToSocket returns -109 (Address not reachable)
-// in some unpredictable cases. crbug.com/139144.
+// Disabled for Android because devices attached to testbots don't have default
+// network, so broadcasting to 255.255.255.255 returns error -109 (Address not
+// reachable). crbug.com/139144.
 TEST_F(UDPSocketTest, DISABLED_Broadcast) {
 #else
 TEST_F(UDPSocketTest, Broadcast) {
@@ -224,7 +283,7 @@ TEST_F(UDPSocketTest, Broadcast) {
   IPEndPoint listen_address;
   CreateUDPAddress("0.0.0.0", kPort, &listen_address);
 
-  CapturingNetLog server1_log, server2_log;
+  TestNetLog server1_log, server2_log;
   scoped_ptr<UDPServerSocket> server1(
       new UDPServerSocket(&server1_log, NetLog::Source()));
   scoped_ptr<UDPServerSocket> server2(
@@ -288,15 +347,10 @@ class TestPrng {
   DISALLOW_COPY_AND_ASSIGN(TestPrng);
 };
 
-#if defined(OS_ANDROID)
-// Disabled on Android for lack of 192.168.1.13. crbug.com/161245
-TEST_F(UDPSocketTest, DISABLED_ConnectRandomBind) {
-#else
 TEST_F(UDPSocketTest, ConnectRandomBind) {
-#endif
   std::vector<UDPClientSocket*> sockets;
   IPEndPoint peer_address;
-  CreateUDPAddress("192.168.1.13", 53, &peer_address);
+  CreateUDPAddress("127.0.0.1", 53, &peer_address);
 
   // Create and connect sockets and save port numbers.
   std::deque<int> used_ports;
@@ -437,8 +491,9 @@ TEST_F(UDPSocketTest, ClientGetLocalPeerAddresses) {
   } tests[] = {
     { "127.0.00.1", "127.0.0.1", false },
     { "::1", "::1", true },
-#if !defined(OS_ANDROID)
+#if !defined(OS_ANDROID) && !defined(OS_IOS)
     // Addresses below are disabled on Android. See crbug.com/161248
+    // They are also disabled on iOS. See https://crbug.com/523225
     { "192.168.1.1", "127.0.0.1", false },
     { "2001:db8:0::42", "::1", true },
 #endif

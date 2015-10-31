@@ -6,14 +6,21 @@
 #define NET_COOKIES_COOKIE_STORE_UNITTEST_H_
 
 #include "base/bind.h"
+#include "base/location.h"
 #include "base/message_loop/message_loop.h"
+#include "base/single_thread_task_runner.h"
 #include "base/strings/string_tokenizer.h"
+#include "base/thread_task_runner_handle.h"
 #include "base/threading/thread.h"
 #include "net/cookies/cookie_monster.h"
 #include "net/cookies/cookie_store.h"
 #include "net/cookies/cookie_store_test_callbacks.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
+
+#if defined(OS_IOS)
+#include "base/ios/ios_util.h"
+#endif
 
 // This file declares unittest templates that can be used to test common
 // behavior of any CookieStore implementation.
@@ -30,6 +37,8 @@ const char kUrlGoogle[] = "http://www.google.izzle";
 const char kUrlGoogleFoo[] = "http://www.google.izzle/foo";
 const char kUrlGoogleBar[] = "http://www.google.izzle/bar";
 const char kUrlGoogleSecure[] = "https://www.google.izzle";
+const char kUrlGoogleWebSocket[] = "ws://www.google.izzle";
+const char kUrlGoogleWebSocketSecure[] = "wss://www.google.izzle";
 const char kValidCookieLine[] = "A=B; path=/";
 const char kValidDomainCookieLine[] = "A=B; path=/; domain=google.izzle";
 
@@ -49,9 +58,9 @@ const char kValidDomainCookieLine[] = "A=B; path=/; domain=google.izzle";
 //   // and the "com" domains.
 //   static const bool supports_non_dotted_domains;
 //
-//   // The cookie store handles the domains with trailing dots (such as "com.")
-//   // correctly.
-//   static const bool supports_trailing_dots;
+//   // The cookie store does not fold domains with trailing dots (so "com." and
+//   "com" are different domains).
+//   static const bool preserves_trailing_dots;
 //
 //   // The cookie store rejects cookies for invalid schemes such as ftp.
 //   static const bool filters_schemes;
@@ -206,7 +215,7 @@ class CookieStoreTest : public testing::Test {
 
   void RunFor(int ms) {
     // Runs the test thread message loop for up to |ms| milliseconds.
-    base::MessageLoop::current()->PostDelayedTask(
+    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
         FROM_HERE,
         base::Bind(&base::MessageLoop::Quit, weak_factory_->GetWeakPtr()),
         base::TimeDelta::FromMilliseconds(ms));
@@ -501,16 +510,12 @@ TYPED_TEST_P(CookieStoreTest, TestNonDottedAndTLD) {
     // http://com. should be treated the same as http://com.
     scoped_refptr<CookieStore> cs(this->GetCookieStore());
     GURL url("http://com./index.html");
-    if (TypeParam::supports_trailing_dots) {
-      EXPECT_TRUE(this->SetCookie(cs.get(), url, "a=1"));
-      this->MatchCookieLines("a=1", this->GetCookies(cs.get(), url));
-      this->MatchCookieLines(
-          std::string(),
-          this->GetCookies(cs.get(),
-                           GURL("http://hopefully-no-cookies.com./")));
-    } else {
-      EXPECT_FALSE(this->SetCookie(cs.get(), url, "a=1"));
-    }
+    EXPECT_TRUE(this->SetCookie(cs.get(), url, "a=1"));
+    this->MatchCookieLines("a=1", this->GetCookies(cs.get(), url));
+    this->MatchCookieLines(
+        std::string(),
+        this->GetCookies(cs.get(),
+                         GURL("http://hopefully-no-cookies.com./")));
   }
 
   {  // Should not be able to set host cookie from a subdomain.
@@ -562,18 +567,21 @@ TYPED_TEST_P(CookieStoreTest, TestHostEndsWithDot) {
   EXPECT_TRUE(this->SetCookie(cs.get(), url, "a=1"));
   this->MatchCookieLines("a=1", this->GetCookies(cs.get(), url));
 
-  if (TypeParam::supports_trailing_dots) {
-    // Do not share cookie space with the dot version of domain.
-    // Note: this is not what FireFox does, but it _is_ what IE+Safari do.
+  // Do not share cookie space with the dot version of domain.
+  // Note: this is not what FireFox does, but it _is_ what IE+Safari do.
+  if (TypeParam::preserves_trailing_dots) {
     EXPECT_FALSE(
         this->SetCookie(cs.get(), url, "b=2; domain=.www.google.com."));
     this->MatchCookieLines("a=1", this->GetCookies(cs.get(), url));
-
     EXPECT_TRUE(
         this->SetCookie(cs.get(), url_with_dot, "b=2; domain=.google.com."));
     this->MatchCookieLines("b=2", this->GetCookies(cs.get(), url_with_dot));
   } else {
-    EXPECT_TRUE(this->SetCookie(cs.get(), url, "b=2; domain=.www.google.com."));
+    EXPECT_TRUE(
+        this->SetCookie(cs.get(), url, "b=2; domain=.www.google.com."));
+    this->MatchCookieLines("a=1 b=2", this->GetCookies(cs.get(), url));
+    // Setting this cookie should fail, since the trailing dot on the domain
+    // isn't preserved, and then the domain mismatches the URL.
     EXPECT_FALSE(
         this->SetCookie(cs.get(), url_with_dot, "b=2; domain=.google.com."));
   }
@@ -1087,7 +1095,7 @@ class MultiThreadedCookieStoreTest :
  protected:
   void RunOnOtherThread(const base::Closure& task) {
     other_thread_.Start();
-    other_thread_.message_loop()->PostTask(FROM_HERE, task);
+    other_thread_.task_runner()->PostTask(FROM_HERE, task);
     CookieStoreTest<CookieStoreTestTraits>::RunFor(kTimeout);
     other_thread_.Stop();
   }
@@ -1105,10 +1113,9 @@ TYPED_TEST_P(MultiThreadedCookieStoreTest, ThreadCheckGetCookies) {
   EXPECT_TRUE(this->SetCookie(cs.get(), this->url_google_, "A=B"));
   this->MatchCookieLines("A=B", this->GetCookies(cs.get(), this->url_google_));
   StringResultCookieCallback callback(&this->other_thread_);
-  base::Closure task = base::Bind(
-      &net::MultiThreadedCookieStoreTest<TypeParam>::GetCookiesTask,
-      base::Unretained(this),
-      cs, this->url_google_, &callback);
+  base::Closure task =
+      base::Bind(&MultiThreadedCookieStoreTest<TypeParam>::GetCookiesTask,
+                 base::Unretained(this), cs, this->url_google_, &callback);
   this->RunOnOtherThread(task);
   EXPECT_TRUE(callback.did_run());
   EXPECT_EQ("A=B", callback.result());
@@ -1124,9 +1131,8 @@ TYPED_TEST_P(MultiThreadedCookieStoreTest, ThreadCheckGetCookiesWithOptions) {
       "A=B", this->GetCookiesWithOptions(cs.get(), this->url_google_, options));
   StringResultCookieCallback callback(&this->other_thread_);
   base::Closure task = base::Bind(
-      &net::MultiThreadedCookieStoreTest<TypeParam>::GetCookiesWithOptionsTask,
-      base::Unretained(this),
-      cs, this->url_google_, options, &callback);
+      &MultiThreadedCookieStoreTest<TypeParam>::GetCookiesWithOptionsTask,
+      base::Unretained(this), cs, this->url_google_, options, &callback);
   this->RunOnOtherThread(task);
   EXPECT_TRUE(callback.did_run());
   EXPECT_EQ("A=B", callback.result());
@@ -1141,9 +1147,8 @@ TYPED_TEST_P(MultiThreadedCookieStoreTest, ThreadCheckSetCookieWithOptions) {
       this->SetCookieWithOptions(cs.get(), this->url_google_, "A=B", options));
   ResultSavingCookieCallback<bool> callback(&this->other_thread_);
   base::Closure task = base::Bind(
-      &net::MultiThreadedCookieStoreTest<TypeParam>::SetCookieWithOptionsTask,
-      base::Unretained(this),
-      cs, this->url_google_, "A=B", options, &callback);
+      &MultiThreadedCookieStoreTest<TypeParam>::SetCookieWithOptionsTask,
+      base::Unretained(this), cs, this->url_google_, "A=B", options, &callback);
   this->RunOnOtherThread(task);
   EXPECT_TRUE(callback.did_run());
   EXPECT_TRUE(callback.result());
@@ -1160,10 +1165,9 @@ TYPED_TEST_P(MultiThreadedCookieStoreTest, ThreadCheckDeleteCookie) {
   EXPECT_TRUE(
       this->SetCookieWithOptions(cs.get(), this->url_google_, "A=B", options));
   NoResultCookieCallback callback(&this->other_thread_);
-  base::Closure task = base::Bind(
-      &net::MultiThreadedCookieStoreTest<TypeParam>::DeleteCookieTask,
-      base::Unretained(this),
-      cs, this->url_google_, "A", &callback);
+  base::Closure task =
+      base::Bind(&MultiThreadedCookieStoreTest<TypeParam>::DeleteCookieTask,
+                 base::Unretained(this), cs, this->url_google_, "A", &callback);
   this->RunOnOtherThread(task);
   EXPECT_TRUE(callback.did_run());
 }
@@ -1186,9 +1190,8 @@ TYPED_TEST_P(MultiThreadedCookieStoreTest, ThreadCheckDeleteSessionCookies) {
       this->SetCookieWithOptions(cs.get(), this->url_google_, "A=B", options));
   ResultSavingCookieCallback<int> callback(&this->other_thread_);
   base::Closure task = base::Bind(
-      &net::MultiThreadedCookieStoreTest<TypeParam>::DeleteSessionCookiesTask,
-      base::Unretained(this),
-      cs, &callback);
+      &MultiThreadedCookieStoreTest<TypeParam>::DeleteSessionCookiesTask,
+      base::Unretained(this), cs, &callback);
   this->RunOnOtherThread(task);
   EXPECT_TRUE(callback.did_run());
   EXPECT_EQ(1, callback.result());

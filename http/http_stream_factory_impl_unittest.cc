@@ -4,12 +4,14 @@
 
 #include "net/http/http_stream_factory_impl.h"
 
+#include <stdint.h>
+
 #include <string>
 #include <vector>
 
 #include "base/basictypes.h"
 #include "base/compiler_specific.h"
-#include "net/base/net_log.h"
+#include "net/base/port_util.h"
 #include "net/base/test_completion_callback.h"
 #include "net/cert/mock_cert_verifier.h"
 #include "net/dns/mock_host_resolver.h"
@@ -22,6 +24,7 @@
 #include "net/http/http_server_properties_impl.h"
 #include "net/http/http_stream.h"
 #include "net/http/transport_security_state.h"
+#include "net/log/net_log.h"
 #include "net/proxy/proxy_info.h"
 #include "net/proxy/proxy_service.h"
 #include "net/socket/client_socket_handle.h"
@@ -80,17 +83,17 @@ class MockWebSocketHandshakeStream : public WebSocketHandshakeStreamBase {
   }
   void Close(bool not_reusable) override {}
   bool IsResponseBodyComplete() const override { return false; }
-  bool CanFindEndOfResponse() const override { return false; }
   bool IsConnectionReused() const override { return false; }
   void SetConnectionReused() override {}
-  bool IsConnectionReusable() const override { return false; }
-  int64 GetTotalReceivedBytes() const override { return 0; }
+  bool CanReuseConnection() const override { return false; }
+  int64_t GetTotalReceivedBytes() const override { return 0; }
+  int64_t GetTotalSentBytes() const override { return 0; }
   bool GetLoadTimingInfo(LoadTimingInfo* load_timing_info) const override {
     return false;
   }
   void GetSSLInfo(SSLInfo* ssl_info) override {}
   void GetSSLCertRequestInfo(SSLCertRequestInfo* cert_request_info) override {}
-  bool IsSpdyHttpStream() const override { return false; }
+  bool GetRemoteEndpoint(IPEndPoint* endpoint) override { return false; }
   void Drain(HttpNetworkSession* session) override {}
   void SetPriority(RequestPriority priority) override {}
   UploadProgress GetUploadProgress() const override { return UploadProgress(); }
@@ -165,7 +168,9 @@ class StreamRequestWaiter : public HttpStreamRequest::Delegate {
     used_proxy_info_ = used_proxy_info;
   }
 
-  void OnStreamFailed(int status, const SSLConfig& used_ssl_config) override {}
+  void OnStreamFailed(int status,
+                      const SSLConfig& used_ssl_config,
+                      SSLFailureState ssl_failure_state) override {}
 
   void OnCertificateError(int status,
                           const SSLConfig& used_ssl_config,
@@ -298,17 +303,17 @@ void PreconnectHelperForURL(int num_streams,
   request.url = url;
   request.load_flags = 0;
 
-  session->http_stream_factory()->PreconnectStreams(
-      num_streams, request, DEFAULT_PRIORITY, ssl_config, ssl_config);
+  session->http_stream_factory()->PreconnectStreams(num_streams, request,
+                                                    ssl_config, ssl_config);
   mock_factory->WaitForPreconnects();
-};
+}
 
 void PreconnectHelper(const TestCase& test,
                       HttpNetworkSession* session) {
   GURL url = test.ssl ? GURL("https://www.google.com") :
       GURL("http://www.google.com");
   PreconnectHelperForURL(test.num_streams, url, session);
-};
+}
 
 template<typename ParentPool>
 class CapturePreconnectsSocketPool : public ParentPool {
@@ -320,51 +325,47 @@ class CapturePreconnectsSocketPool : public ParentPool {
     return last_num_streams_;
   }
 
-  virtual int RequestSocket(const std::string& group_name,
-                            const void* socket_params,
-                            RequestPriority priority,
-                            ClientSocketHandle* handle,
-                            const CompletionCallback& callback,
-                            const BoundNetLog& net_log) override {
+  int RequestSocket(const std::string& group_name,
+                    const void* socket_params,
+                    RequestPriority priority,
+                    ClientSocketHandle* handle,
+                    const CompletionCallback& callback,
+                    const BoundNetLog& net_log) override {
     ADD_FAILURE();
     return ERR_UNEXPECTED;
   }
 
-  virtual void RequestSockets(const std::string& group_name,
-                              const void* socket_params,
-                              int num_sockets,
-                              const BoundNetLog& net_log) override {
+  void RequestSockets(const std::string& group_name,
+                      const void* socket_params,
+                      int num_sockets,
+                      const BoundNetLog& net_log) override {
     last_num_streams_ = num_sockets;
   }
 
-  virtual void CancelRequest(const std::string& group_name,
-                             ClientSocketHandle* handle) override {
+  void CancelRequest(const std::string& group_name,
+                     ClientSocketHandle* handle) override {
     ADD_FAILURE();
   }
-  virtual void ReleaseSocket(const std::string& group_name,
-                             scoped_ptr<StreamSocket> socket,
-                             int id) override {
+  void ReleaseSocket(const std::string& group_name,
+                     scoped_ptr<StreamSocket> socket,
+                     int id) override {
     ADD_FAILURE();
   }
-  virtual void CloseIdleSockets() override {
-    ADD_FAILURE();
-  }
-  virtual int IdleSocketCount() const override {
+  void CloseIdleSockets() override { ADD_FAILURE(); }
+  int IdleSocketCount() const override {
     ADD_FAILURE();
     return 0;
   }
-  virtual int IdleSocketCountInGroup(
-      const std::string& group_name) const override {
+  int IdleSocketCountInGroup(const std::string& group_name) const override {
     ADD_FAILURE();
     return 0;
   }
-  virtual LoadState GetLoadState(
-      const std::string& group_name,
-      const ClientSocketHandle* handle) const override {
+  LoadState GetLoadState(const std::string& group_name,
+                         const ClientSocketHandle* handle) const override {
     ADD_FAILURE();
     return LOAD_STATE_IDLE;
   }
-  virtual base::TimeDelta ConnectionTimeout() const override {
+  base::TimeDelta ConnectionTimeout() const override {
     return base::TimeDelta();
   }
 
@@ -381,17 +382,18 @@ CapturePreconnectsSOCKSSocketPool;
 typedef CapturePreconnectsSocketPool<SSLClientSocketPool>
 CapturePreconnectsSSLSocketPool;
 
-template<typename ParentPool>
+template <typename ParentPool>
 CapturePreconnectsSocketPool<ParentPool>::CapturePreconnectsSocketPool(
-    HostResolver* host_resolver, CertVerifier* /* cert_verifier */)
-    : ParentPool(0, 0, nullptr, host_resolver, nullptr, nullptr),
-      last_num_streams_(-1) {}
+    HostResolver* host_resolver,
+    CertVerifier* /* cert_verifier */)
+    : ParentPool(0, 0, host_resolver, nullptr, nullptr), last_num_streams_(-1) {
+}
 
 template <>
 CapturePreconnectsHttpProxySocketPool::CapturePreconnectsSocketPool(
     HostResolver* /* host_resolver */,
     CertVerifier* /* cert_verifier */)
-    : HttpProxyClientSocketPool(0, 0, nullptr, nullptr, nullptr, nullptr),
+    : HttpProxyClientSocketPool(0, 0, nullptr, nullptr, nullptr),
       last_num_streams_(-1) {
 }
 
@@ -401,7 +403,6 @@ CapturePreconnectsSSLSocketPool::CapturePreconnectsSocketPool(
     CertVerifier* cert_verifier)
     : SSLClientSocketPool(0,
                           0,
-                          nullptr,  // ssl_histograms
                           cert_verifier,
                           nullptr,        // channel_id_store
                           nullptr,        // transport_security_state
@@ -413,7 +414,6 @@ CapturePreconnectsSSLSocketPool::CapturePreconnectsSocketPool(
                           nullptr,
                           nullptr,
                           nullptr,   // ssl_config_service
-                          false,     // enable_ssl_connect_job_waiting
                           nullptr),  // net_log
       last_num_streams_(-1) {
 }
@@ -422,10 +422,10 @@ class HttpStreamFactoryTest : public ::testing::Test,
                               public ::testing::WithParamInterface<NextProto> {
 };
 
-INSTANTIATE_TEST_CASE_P(
-    NextProto,
-    HttpStreamFactoryTest,
-    testing::Values(kProtoSPDY31, kProtoSPDY4_14, kProtoSPDY4_15));
+INSTANTIATE_TEST_CASE_P(NextProto,
+                        HttpStreamFactoryTest,
+                        testing::Values(kProtoSPDY31,
+                                        kProtoHTTP2));
 
 TEST_P(HttpStreamFactoryTest, PreconnectDirect) {
   for (size_t i = 0; i < arraysize(kTests); ++i) {
@@ -554,8 +554,7 @@ TEST_P(HttpStreamFactoryTest, PreconnectDirectWithExistingSpdySession) {
 // Verify that preconnects to unsafe ports are cancelled before they reach
 // the SocketPool.
 TEST_P(HttpStreamFactoryTest, PreconnectUnsafePort) {
-  ASSERT_FALSE(IsPortAllowedByDefault(7));
-  ASSERT_FALSE(IsPortAllowedByOverride(7));
+  ASSERT_FALSE(IsPortAllowedForScheme(7, "http"));
 
   SpdySessionDependencies session_deps(
       GetParam(), ProxyService::CreateDirect());
@@ -572,7 +571,6 @@ TEST_P(HttpStreamFactoryTest, PreconnectUnsafePort) {
   peer.SetClientSocketPoolManager(mock_pool_manager.Pass());
 
   PreconnectHelperForURL(1, GURL("http://www.google.com:7"), session.get());
-
   EXPECT_EQ(-1, transport_conn_pool->last_num_streams());
 }
 
@@ -616,6 +614,129 @@ TEST_P(HttpStreamFactoryTest, JobNotifiesProxy) {
   EXPECT_TRUE(iter != retry_info.end());
 }
 
+TEST_P(HttpStreamFactoryTest, UnreachableQuicProxyMarkedAsBad) {
+  const int mock_error[] = {ERR_QUIC_PROTOCOL_ERROR, ERR_QUIC_HANDSHAKE_FAILED,
+                            ERR_MSG_TOO_BIG};
+  for (size_t i = 0; i < arraysize(mock_error); ++i) {
+    scoped_ptr<ProxyService> proxy_service;
+    proxy_service =
+        ProxyService::CreateFixedFromPacResult("QUIC bad:99; DIRECT");
+
+    HttpNetworkSession::Params params;
+    params.enable_quic = true;
+    params.enable_quic_for_proxies = true;
+    scoped_refptr<SSLConfigServiceDefaults> ssl_config_service(
+        new SSLConfigServiceDefaults);
+    HttpServerPropertiesImpl http_server_properties;
+    MockClientSocketFactory socket_factory;
+    params.client_socket_factory = &socket_factory;
+    MockHostResolver host_resolver;
+    params.host_resolver = &host_resolver;
+    TransportSecurityState transport_security_state;
+    params.transport_security_state = &transport_security_state;
+    params.proxy_service = proxy_service.get();
+    params.ssl_config_service = ssl_config_service.get();
+    params.http_server_properties = http_server_properties.GetWeakPtr();
+
+    scoped_refptr<HttpNetworkSession> session;
+    session = new HttpNetworkSession(params);
+    session->quic_stream_factory()->set_require_confirmation(false);
+
+    StaticSocketDataProvider socket_data1;
+    socket_data1.set_connect_data(MockConnect(ASYNC, mock_error[i]));
+    socket_factory.AddSocketDataProvider(&socket_data1);
+
+    // Second connection attempt succeeds.
+    StaticSocketDataProvider socket_data2;
+    socket_data2.set_connect_data(MockConnect(ASYNC, OK));
+    socket_factory.AddSocketDataProvider(&socket_data2);
+
+    // Now request a stream. It should succeed using the second proxy in the
+    // list.
+    HttpRequestInfo request_info;
+    request_info.method = "GET";
+    request_info.url = GURL("http://www.google.com");
+
+    SSLConfig ssl_config;
+    StreamRequestWaiter waiter;
+    scoped_ptr<HttpStreamRequest> request(
+        session->http_stream_factory()->RequestStream(
+            request_info, DEFAULT_PRIORITY, ssl_config, ssl_config, &waiter,
+            BoundNetLog()));
+    waiter.WaitForStream();
+
+    // The proxy that failed should now be known to the proxy_service as bad.
+    const ProxyRetryInfoMap& retry_info =
+        session->proxy_service()->proxy_retry_info();
+    EXPECT_EQ(1u, retry_info.size()) << mock_error[i];
+    EXPECT_TRUE(waiter.used_proxy_info().is_direct());
+
+    ProxyRetryInfoMap::const_iterator iter = retry_info.find("quic://bad:99");
+    EXPECT_TRUE(iter != retry_info.end()) << mock_error[i];
+  }
+}
+
+}  // namespace
+
+TEST_P(HttpStreamFactoryTest, QuicLossyProxyMarkedAsBad) {
+  // Checks if a
+  scoped_ptr<ProxyService> proxy_service;
+  proxy_service = ProxyService::CreateFixedFromPacResult("QUIC bad:99; DIRECT");
+
+  HttpNetworkSession::Params params;
+  params.enable_quic = true;
+  params.enable_quic_for_proxies = true;
+  scoped_refptr<SSLConfigServiceDefaults> ssl_config_service(
+      new SSLConfigServiceDefaults);
+  HttpServerPropertiesImpl http_server_properties;
+  MockClientSocketFactory socket_factory;
+  params.client_socket_factory = &socket_factory;
+  MockHostResolver host_resolver;
+  params.host_resolver = &host_resolver;
+  TransportSecurityState transport_security_state;
+  params.transport_security_state = &transport_security_state;
+  params.proxy_service = proxy_service.get();
+  params.ssl_config_service = ssl_config_service.get();
+  params.http_server_properties = http_server_properties.GetWeakPtr();
+  params.quic_max_number_of_lossy_connections = 2;
+
+  scoped_refptr<HttpNetworkSession> session;
+  session = new HttpNetworkSession(params);
+  session->quic_stream_factory()->set_require_confirmation(false);
+
+  session->quic_stream_factory()->number_of_lossy_connections_[99] =
+      params.quic_max_number_of_lossy_connections;
+
+  StaticSocketDataProvider socket_data2;
+  socket_data2.set_connect_data(MockConnect(ASYNC, OK));
+  socket_factory.AddSocketDataProvider(&socket_data2);
+
+  // Now request a stream. It should succeed using the second proxy in the
+  // list.
+  HttpRequestInfo request_info;
+  request_info.method = "GET";
+  request_info.url = GURL("http://www.google.com");
+
+  SSLConfig ssl_config;
+  StreamRequestWaiter waiter;
+  scoped_ptr<HttpStreamRequest> request(
+      session->http_stream_factory()->RequestStream(
+          request_info, DEFAULT_PRIORITY, ssl_config, ssl_config, &waiter,
+          BoundNetLog()));
+  waiter.WaitForStream();
+
+  // The proxy that failed should now be known to the proxy_service as bad.
+  const ProxyRetryInfoMap& retry_info =
+      session->proxy_service()->proxy_retry_info();
+  EXPECT_EQ(1u, retry_info.size());
+  EXPECT_TRUE(waiter.used_proxy_info().is_direct());
+
+  ProxyRetryInfoMap::const_iterator iter = retry_info.find("quic://bad:99");
+  EXPECT_TRUE(iter != retry_info.end());
+}
+
+namespace {
+
 TEST_P(HttpStreamFactoryTest, PrivacyModeDisablesChannelId) {
   SpdySessionDependencies session_deps(
       GetParam(), ProxyService::CreateDirect());
@@ -657,6 +778,7 @@ TEST_P(HttpStreamFactoryTest, PrivacyModeDisablesChannelId) {
 }
 
 namespace {
+
 // Return count of distinct groups in given socket pool.
 int GetSocketPoolGroupCount(ClientSocketPool* pool) {
   int count = 0;
@@ -668,6 +790,17 @@ int GetSocketPoolGroupCount(ClientSocketPool* pool) {
   }
   return count;
 }
+
+// Return count of distinct spdy sessions.
+int GetSpdySessionCount(HttpNetworkSession* session) {
+  scoped_ptr<base::Value> value(
+      session->spdy_session_pool()->SpdySessionPoolInfoToValue());
+  base::ListValue* session_list;
+  if (!value || !value->GetAsList(&session_list))
+    return -1;
+  return session_list->GetSize();
+}
+
 }  // namespace
 
 TEST_P(HttpStreamFactoryTest, PrivacyModeUsesDifferentSocketPoolGroup) {
@@ -782,8 +915,8 @@ TEST_P(HttpStreamFactoryTest, RequestHttpStream) {
   EXPECT_TRUE(waiter.stream_done());
   ASSERT_TRUE(nullptr != waiter.stream());
   EXPECT_TRUE(nullptr == waiter.websocket_stream());
-  EXPECT_FALSE(waiter.stream()->IsSpdyHttpStream());
 
+  EXPECT_EQ(0, GetSpdySessionCount(session.get()));
   EXPECT_EQ(1, GetSocketPoolGroupCount(
       session->GetTransportSocketPool(HttpNetworkSession::NORMAL_SOCKET_POOL)));
   EXPECT_EQ(0, GetSocketPoolGroupCount(session->GetSSLSocketPool(
@@ -831,7 +964,8 @@ TEST_P(HttpStreamFactoryTest, RequestHttpStreamOverSSL) {
   EXPECT_TRUE(waiter.stream_done());
   ASSERT_TRUE(nullptr != waiter.stream());
   EXPECT_TRUE(nullptr == waiter.websocket_stream());
-  EXPECT_FALSE(waiter.stream()->IsSpdyHttpStream());
+
+  EXPECT_EQ(0, GetSpdySessionCount(session.get()));
   EXPECT_EQ(1, GetSocketPoolGroupCount(
       session->GetTransportSocketPool(HttpNetworkSession::NORMAL_SOCKET_POOL)));
   EXPECT_EQ(1, GetSocketPoolGroupCount(
@@ -876,7 +1010,8 @@ TEST_P(HttpStreamFactoryTest, RequestHttpStreamOverProxy) {
   EXPECT_TRUE(waiter.stream_done());
   ASSERT_TRUE(nullptr != waiter.stream());
   EXPECT_TRUE(nullptr == waiter.websocket_stream());
-  EXPECT_FALSE(waiter.stream()->IsSpdyHttpStream());
+
+  EXPECT_EQ(0, GetSpdySessionCount(session.get()));
   EXPECT_EQ(0, GetSocketPoolGroupCount(
       session->GetTransportSocketPool(HttpNetworkSession::NORMAL_SOCKET_POOL)));
   EXPECT_EQ(0, GetSocketPoolGroupCount(
@@ -1048,21 +1183,18 @@ TEST_P(HttpStreamFactoryTest, RequestSpdyHttpStream) {
   SpdySessionDependencies session_deps(GetParam(),
                                        ProxyService::CreateDirect());
 
-  MockRead mock_read(ASYNC, OK);
-  DeterministicSocketData socket_data(&mock_read, 1, nullptr, 0);
+  MockRead mock_read(SYNCHRONOUS, ERR_IO_PENDING);
+  SequencedSocketData socket_data(&mock_read, 1, nullptr, 0);
   socket_data.set_connect_data(MockConnect(ASYNC, OK));
-  session_deps.deterministic_socket_factory->AddSocketDataProvider(
-      &socket_data);
+  session_deps.socket_factory->AddSocketDataProvider(&socket_data);
 
   SSLSocketDataProvider ssl_socket_data(ASYNC, OK);
   ssl_socket_data.SetNextProto(GetParam());
-  session_deps.deterministic_socket_factory->AddSSLSocketDataProvider(
-      &ssl_socket_data);
+  session_deps.socket_factory->AddSSLSocketDataProvider(&ssl_socket_data);
 
   HostPortPair host_port_pair("www.google.com", 443);
-  scoped_refptr<HttpNetworkSession>
-      session(SpdySessionDependencies::SpdyCreateSessionDeterministic(
-          &session_deps));
+  scoped_refptr<HttpNetworkSession> session(
+      SpdySessionDependencies::SpdyCreateSession(&session_deps));
 
   // Now request a stream.
   HttpRequestInfo request_info;
@@ -1084,7 +1216,8 @@ TEST_P(HttpStreamFactoryTest, RequestSpdyHttpStream) {
   EXPECT_TRUE(waiter.stream_done());
   EXPECT_TRUE(nullptr == waiter.websocket_stream());
   ASSERT_TRUE(nullptr != waiter.stream());
-  EXPECT_TRUE(waiter.stream()->IsSpdyHttpStream());
+
+  EXPECT_EQ(1, GetSpdySessionCount(session.get()));
   EXPECT_EQ(1, GetSocketPoolGroupCount(
       session->GetTransportSocketPool(HttpNetworkSession::NORMAL_SOCKET_POOL)));
   EXPECT_EQ(1, GetSocketPoolGroupCount(
@@ -1231,28 +1364,24 @@ TEST_P(HttpStreamFactoryTest, DISABLED_RequestWebSocketSpdyHandshakeStream) {
 TEST_P(HttpStreamFactoryTest, DISABLED_OrphanedWebSocketStream) {
   SpdySessionDependencies session_deps(GetParam(),
                                        ProxyService::CreateDirect());
-  session_deps.use_alternate_protocols = true;
+  session_deps.use_alternative_services = true;
 
   MockRead mock_read(ASYNC, OK);
-  DeterministicSocketData socket_data(&mock_read, 1, nullptr, 0);
+  SequencedSocketData socket_data(&mock_read, 1, nullptr, 0);
   socket_data.set_connect_data(MockConnect(ASYNC, OK));
-  session_deps.deterministic_socket_factory->AddSocketDataProvider(
-      &socket_data);
+  session_deps.socket_factory->AddSocketDataProvider(&socket_data);
 
   MockRead mock_read2(ASYNC, OK);
-  DeterministicSocketData socket_data2(&mock_read2, 1, nullptr, 0);
+  SequencedSocketData socket_data2(&mock_read2, 1, nullptr, 0);
   socket_data2.set_connect_data(MockConnect(ASYNC, ERR_IO_PENDING));
-  session_deps.deterministic_socket_factory->AddSocketDataProvider(
-      &socket_data2);
+  session_deps.socket_factory->AddSocketDataProvider(&socket_data2);
 
   SSLSocketDataProvider ssl_socket_data(ASYNC, OK);
   ssl_socket_data.SetNextProto(GetParam());
-  session_deps.deterministic_socket_factory->AddSSLSocketDataProvider(
-      &ssl_socket_data);
+  session_deps.socket_factory->AddSSLSocketDataProvider(&ssl_socket_data);
 
-  scoped_refptr<HttpNetworkSession>
-      session(SpdySessionDependencies::SpdyCreateSessionDeterministic(
-          &session_deps));
+  scoped_refptr<HttpNetworkSession> session(
+      SpdySessionDependencies::SpdyCreateSession(&session_deps));
 
   // Now request a stream.
   HttpRequestInfo request_info;
@@ -1260,11 +1389,10 @@ TEST_P(HttpStreamFactoryTest, DISABLED_OrphanedWebSocketStream) {
   request_info.url = GURL("ws://www.google.com:8888");
   request_info.load_flags = 0;
 
-  session->http_server_properties()->SetAlternateProtocol(
+  base::Time expiration = base::Time::Now() + base::TimeDelta::FromDays(1);
+  session->http_server_properties()->SetAlternativeService(
       HostPortPair("www.google.com", 8888),
-      9999,
-      NPN_SPDY_3,
-      1);
+      AlternativeService(NPN_HTTP_2, "www.google.com", 9999), 1.0, expiration);
 
   SSLConfig ssl_config;
   StreamRequestWaiter waiter;

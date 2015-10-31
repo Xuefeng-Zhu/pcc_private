@@ -20,104 +20,98 @@ namespace net {
 AckNotifierManager::AckNotifierManager() {}
 
 AckNotifierManager::~AckNotifierManager() {
-  STLDeleteElements(&ack_notifiers_);
+  for (const auto& pair : ack_notifier_map_) {
+    for (QuicAckNotifier* notifier : pair.second) {
+      if (notifier->OnPacketAbandoned()) {
+        delete notifier;
+      }
+    }
+  }
 }
 
-void AckNotifierManager::OnPacketAcked(QuicPacketSequenceNumber sequence_number,
+void AckNotifierManager::OnPacketAcked(QuicPacketNumber packet_number,
                                        QuicTime::Delta delta_largest_observed) {
   // Inform all the registered AckNotifiers of the new ACK.
-  auto map_it = ack_notifier_map_.find(sequence_number);
+  auto map_it = ack_notifier_map_.find(packet_number);
   if (map_it == ack_notifier_map_.end()) {
-    // No AckNotifier is interested in this sequence number.
+    // No AckNotifier is interested in this packet number.
     return;
   }
 
   // One or more AckNotifiers are registered as interested in this sequence
   // number. Iterate through them and call OnAck on each.
-  AckNotifierSet& ack_notifier_set = map_it->second;
-  for (QuicAckNotifier* ack_notifier : ack_notifier_set) {
-    ack_notifier->OnAck(sequence_number, delta_largest_observed);
-
-    // If this has resulted in an empty AckNotifer, erase it.
-    if (ack_notifier->IsEmpty()) {
+  for (QuicAckNotifier* ack_notifier : map_it->second) {
+    if (ack_notifier->OnAck(delta_largest_observed)) {
+      // If this has resulted in an empty AckNotifer, erase it.
       delete ack_notifier;
-      ack_notifiers_.erase(ack_notifier);
     }
   }
 
-  // Remove the sequence number from the map as we have notified all the
+  // Remove the packet number from the map as we have notified all the
   // registered AckNotifiers, and we won't see it again.
   ack_notifier_map_.erase(map_it);
 }
 
-void AckNotifierManager::UpdateSequenceNumber(
-    QuicPacketSequenceNumber old_sequence_number,
-    QuicPacketSequenceNumber new_sequence_number) {
-  auto map_it = ack_notifier_map_.find(old_sequence_number);
+void AckNotifierManager::OnPacketRetransmitted(
+    QuicPacketNumber old_packet_number,
+    QuicPacketNumber new_packet_number,
+    int packet_payload_size) {
+  auto map_it = ack_notifier_map_.find(old_packet_number);
   if (map_it == ack_notifier_map_.end()) {
-    // No AckNotifiers are interested in the old sequence number.
+    // No AckNotifiers are interested in the old packet number.
     return;
   }
 
-  // Update the existing QuicAckNotifiers to the new sequence number.
-  AckNotifierSet& ack_notifier_set = map_it->second;
-  for (QuicAckNotifier* ack_notifier : ack_notifier_set) {
-    ack_notifier->UpdateSequenceNumber(old_sequence_number,
-                                       new_sequence_number);
+  // Update the existing QuicAckNotifiers to the new packet number.
+  AckNotifierList& ack_notifier_list = map_it->second;
+  for (QuicAckNotifier* ack_notifier : ack_notifier_list) {
+    ack_notifier->OnPacketRetransmitted(packet_payload_size);
   }
 
-  // The old sequence number is no longer of interest, copy the updated
-  // AckNotifiers to the new sequence number before deleting the old.
-  ack_notifier_map_[new_sequence_number] = ack_notifier_set;
+  // The old packet number is no longer of interest, copy the updated
+  // AckNotifiers to the new packet number before deleting the old.
+  // TODO(rtenneti): use std::move when chromium supports it.
+  // ack_notifier_map_[new_packet_number] = std::move(ack_notifier_list);
+  ack_notifier_map_[new_packet_number] = ack_notifier_list;
   ack_notifier_map_.erase(map_it);
 }
 
 void AckNotifierManager::OnSerializedPacket(
     const SerializedPacket& serialized_packet) {
-  if (FLAGS_quic_attach_ack_notifiers_to_packets) {
-    // Inform each attached AckNotifier of the packet's sequence number.
-    for (QuicAckNotifier* notifier : serialized_packet.notifiers) {
-      if (notifier == nullptr) {
-        LOG(DFATAL) << "AckNotifier should not be nullptr.";
-        continue;
-      }
-      notifier->AddSequenceNumber(serialized_packet.sequence_number,
-                                  serialized_packet.packet->length());
-
-      // Update the mapping in the other direction, from sequence number to
-      // AckNotifier.
-      ack_notifier_map_[serialized_packet.sequence_number].insert(notifier);
-
-      // Take ownership of the AckNotifier.
-      ack_notifiers_.insert(notifier);
+  if (serialized_packet.notifiers.empty()) {
+    return;
+  }
+  // Inform each attached AckNotifier of the packet's serialization.
+  AckNotifierList& notifier_list =
+      ack_notifier_map_[serialized_packet.packet_number];
+  for (QuicAckNotifier* notifier : serialized_packet.notifiers) {
+    if (notifier == nullptr) {
+      LOG(DFATAL) << "AckNotifier should not be nullptr.";
+      continue;
     }
-  } else {
-    // AckNotifiers can only be attached to retransmittable frames.
-    RetransmittableFrames* frames = serialized_packet.retransmittable_frames;
-    if (frames == nullptr) {
-      return;
-    }
+    notifier->OnSerializedPacket();
+    notifier_list.push_back(notifier);
+  }
+}
 
-    // For each frame in |serialized_packet|, inform any attached AckNotifiers
-    // of the packet's sequence number.
-    for (const QuicFrame& quic_frame : frames->frames()) {
-      if (quic_frame.type != STREAM_FRAME ||
-          quic_frame.stream_frame->notifier == nullptr) {
-        continue;
-      }
+void AckNotifierManager::OnPacketRemoved(QuicPacketNumber packet_number) {
+  // Determine if there are any notifiers interested in this packet.
+  auto map_it = ack_notifier_map_.find(packet_number);
+  if (map_it == ack_notifier_map_.end()) {
+    return;
+  }
 
-      QuicAckNotifier* notifier = quic_frame.stream_frame->notifier;
-      notifier->AddSequenceNumber(serialized_packet.sequence_number,
-                                  serialized_packet.packet->length());
-
-      // Update the mapping in the other direction, from sequence number to
-      // AckNotifier.
-      ack_notifier_map_[serialized_packet.sequence_number].insert(notifier);
-
-      // Take ownership of the AckNotifier.
-      ack_notifiers_.insert(notifier);
+  // Notify all of the interested notifiers that the packet is abandoned.
+  for (QuicAckNotifier* ack_notifier : map_it->second) {
+    DCHECK(ack_notifier);
+    if (ack_notifier->OnPacketAbandoned()) {
+      // If this has resulted in an empty AckNotifer, erase it.
+      delete ack_notifier;
     }
   }
+
+  // Remove the packet with given packet number from the map.
+  ack_notifier_map_.erase(map_it);
 }
 
 }  // namespace net

@@ -6,13 +6,13 @@
 
 #include "base/basictypes.h"
 #include "base/strings/stringprintf.h"
-#include "net/base/net_log.h"
 #include "net/cert/mock_cert_verifier.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/http/http_network_session.h"
 #include "net/http/http_server_properties_impl.h"
 #include "net/http/http_transaction_test_util.h"
 #include "net/http/transport_security_state.h"
+#include "net/log/net_log.h"
 #include "net/proxy/proxy_service.h"
 #include "net/socket/socket_test_util.h"
 #include "net/spdy/spdy_session_pool.h"
@@ -32,10 +32,10 @@ class HttpNetworkLayerTest : public PlatformTest {
     ConfigureTestDependencies(ProxyService::CreateDirect());
   }
 
-  void ConfigureTestDependencies(ProxyService* proxy_service) {
+  void ConfigureTestDependencies(scoped_ptr<ProxyService> proxy_service) {
     cert_verifier_.reset(new MockCertVerifier);
     transport_security_state_.reset(new TransportSecurityState);
-    proxy_service_.reset(proxy_service);
+    proxy_service_ = proxy_service.Pass();
     HttpNetworkSession::Params session_params;
     session_params.client_socket_factory = &mock_socket_factory_;
     session_params.host_resolver = &host_resolver_;
@@ -395,9 +395,8 @@ TEST_F(HttpNetworkLayerTest, NetworkUnVerified) {
   rv = trans->Start(&request_info, callback.callback(), BoundNetLog());
   ASSERT_EQ(ERR_CONNECTION_RESET, callback.GetResult(rv));
 
-  // If the response info is null, that means that any consumer won't
-  // see the network accessed bit set.
-  EXPECT_EQ(NULL, trans->GetResponseInfo());
+  // network_accessed is true; the HTTP stack did try to make a connection.
+  EXPECT_TRUE(trans->GetResponseInfo()->network_accessed);
 }
 
 }  // namespace

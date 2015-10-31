@@ -67,7 +67,6 @@ int MapOpenSSLErrorSSL(uint32_t error_code) {
     case SSL_R_UNKNOWN_CERTIFICATE_TYPE:
     case SSL_R_UNKNOWN_CIPHER_TYPE:
     case SSL_R_UNKNOWN_KEY_EXCHANGE_TYPE:
-    case SSL_R_UNKNOWN_PKEY_TYPE:
     case SSL_R_UNKNOWN_SSL_VERSION:
       return ERR_NOT_IMPLEMENTED;
     case SSL_R_UNSUPPORTED_SSL_VERSION:
@@ -93,8 +92,6 @@ int MapOpenSSLErrorSSL(uint32_t error_code) {
       return ERR_SSL_DECRYPT_ERROR_ALERT;
     case SSL_R_TLSV1_UNRECOGNIZED_NAME:
       return ERR_SSL_UNRECOGNIZED_NAME_ALERT;
-    case SSL_R_UNSAFE_LEGACY_RENEGOTIATION_DISABLED:
-      return ERR_SSL_UNSAFE_NEGOTIATION;
     case SSL_R_BAD_DH_P_LENGTH:
       return ERR_SSL_WEAK_SERVER_EPHEMERAL_DH_KEY;
     // SSL_R_UNKNOWN_PROTOCOL is reported if premature application data is
@@ -114,7 +111,6 @@ int MapOpenSSLErrorSSL(uint32_t error_code) {
     case SSL_R_EXTRA_DATA_IN_MESSAGE:
     case SSL_R_GOT_A_FIN_BEFORE_A_CCS:
     case SSL_R_INVALID_COMMAND:
-    case SSL_R_INVALID_STATUS_RESPONSE:
     case SSL_R_INVALID_TICKET_KEYS_LENGTH:
     // SSL_do_handshake reports this error when the server responds to a
     // ClientHello with a fatal close_notify alert.
@@ -154,11 +150,12 @@ int MapOpenSSLErrorSSL(uint32_t error_code) {
   }
 }
 
-base::Value* NetLogOpenSSLErrorCallback(int net_error,
-                                        int ssl_error,
-                                        const OpenSSLErrorInfo& error_info,
-                                        NetLog::LogLevel /* log_level */) {
-  base::DictionaryValue* dict = new base::DictionaryValue();
+scoped_ptr<base::Value> NetLogOpenSSLErrorCallback(
+    int net_error,
+    int ssl_error,
+    const OpenSSLErrorInfo& error_info,
+    NetLogCaptureMode /* capture_mode */) {
+  scoped_ptr<base::DictionaryValue> dict(new base::DictionaryValue());
   dict->SetInteger("net_error", net_error);
   dict->SetInteger("ssl_error", ssl_error);
   if (error_info.error_code != 0) {
@@ -169,7 +166,7 @@ base::Value* NetLogOpenSSLErrorCallback(int net_error,
     dict->SetString("file", error_info.file);
   if (error_info.line != 0)
     dict->SetInteger("line", error_info.line);
-  return dict;
+  return dict.Pass();
 }
 
 }  // namespace
@@ -182,7 +179,7 @@ void OpenSSLPutNetError(const tracked_objects::Location& location, int err) {
     NOTREACHED();
     err = ERR_INVALID_ARGUMENT;
   }
-  ERR_put_error(OpenSSLNetErrorLib(), 0, err,
+  ERR_put_error(OpenSSLNetErrorLib(), err, location.function_name(),
                 location.file_name(), location.line_number());
 }
 

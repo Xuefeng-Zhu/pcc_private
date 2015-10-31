@@ -28,7 +28,10 @@ void AddSpdyHeader(const std::string& name,
   if (headers->find(name) == headers->end()) {
     (*headers)[name] = value;
   } else {
-    (*headers)[name] += '\0' + value;
+    std::string joint_value = (*headers)[name].as_string();
+    joint_value.append(1, '\0');
+    joint_value.append(value);
+    (*headers)[name] = joint_value;
   }
 }
 
@@ -43,20 +46,20 @@ bool SpdyHeadersToHttpResponse(const SpdyHeaderBlock& headers,
   std::string version;
   std::string status;
 
-  // The "status" header is required. "version" is required below SPDY4.
+  // The "status" header is required. "version" is required below HTTP/2.
   SpdyHeaderBlock::const_iterator it;
   it = headers.find(status_key);
   if (it == headers.end())
     return false;
-  status = it->second;
+  status = it->second.as_string();
 
-  if (protocol_version >= SPDY4) {
+  if (protocol_version >= HTTP2) {
     version = "HTTP/1.1";
   } else {
     it = headers.find(version_key);
     if (it == headers.end())
       return false;
-    version = it->second;
+    version = it->second.as_string();
   }
   std::string raw_headers(version);
   raw_headers.push_back(' ');
@@ -71,7 +74,7 @@ bool SpdyHeadersToHttpResponse(const SpdyHeaderBlock& headers,
     // becomes
     //    Set-Cookie: foo\0
     //    Set-Cookie: bar\0
-    std::string value = it->second;
+    std::string value = it->second.as_string();
     size_t start = 0;
     size_t end = 0;
     do {
@@ -82,9 +85,9 @@ bool SpdyHeadersToHttpResponse(const SpdyHeaderBlock& headers,
       else
         tval = value.substr(start);
       if (protocol_version >= 3 && it->first[0] == ':')
-        raw_headers.append(it->first.substr(1));
+        raw_headers.append(it->first.as_string().substr(1));
       else
-        raw_headers.append(it->first);
+        raw_headers.append(it->first.as_string());
       raw_headers.push_back(':');
       raw_headers.append(tval);
       raw_headers.push_back('\0');
@@ -102,37 +105,55 @@ void CreateSpdyHeadersFromHttpRequest(const HttpRequestInfo& info,
                                       SpdyMajorVersion protocol_version,
                                       bool direct,
                                       SpdyHeaderBlock* headers) {
+  static const char kHttpProtocolVersion[] = "HTTP/1.1";
+  switch (protocol_version) {
+    case SPDY2:
+      // TODO(bnc): Remove this code now that SPDY/2 is deprecated.
+      (*headers)["version"] = kHttpProtocolVersion;
+      (*headers)["method"] = info.method;
+      (*headers)["host"] = GetHostAndOptionalPort(info.url);
+      if (info.method == "CONNECT") {
+        (*headers)["url"] = GetHostAndPort(info.url);
+      } else {
+        (*headers)["scheme"] = info.url.scheme();
+        (*headers)["url"] = direct ? info.url.PathForRequest()
+                                   : HttpUtil::SpecForRequest(info.url);
+      }
+      break;
+    case SPDY3:
+      (*headers)[":version"] = kHttpProtocolVersion;
+      (*headers)[":method"] = info.method;
+      (*headers)[":host"] = GetHostAndOptionalPort(info.url);
+      if (info.method == "CONNECT") {
+        (*headers)[":path"] = GetHostAndPort(info.url);
+      } else {
+        (*headers)[":scheme"] = info.url.scheme();
+        (*headers)[":path"] = info.url.PathForRequest();
+      }
+      break;
+    case HTTP2:
+      (*headers)[":method"] = info.method;
+      if (info.method == "CONNECT") {
+        (*headers)[":authority"] = GetHostAndPort(info.url);
+      } else {
+        (*headers)[":authority"] = GetHostAndOptionalPort(info.url);
+        (*headers)[":scheme"] = info.url.scheme();
+        (*headers)[":path"] = info.url.PathForRequest();
+      }
+      break;
+    default:
+      NOTREACHED();
+  }
 
   HttpRequestHeaders::Iterator it(request_headers);
   while (it.GetNext()) {
-    std::string name = base::StringToLowerASCII(it.name());
-    if (name == "connection" || name == "proxy-connection" ||
-        name == "transfer-encoding" || name == "host") {
+    std::string name = base::ToLowerASCII(it.name());
+    if (name.empty() || name[0] == ':' || name == "connection" ||
+        name == "proxy-connection" || name == "transfer-encoding" ||
+        name == "host") {
       continue;
     }
     AddSpdyHeader(name, it.value(), headers);
-  }
-  static const char kHttpProtocolVersion[] = "HTTP/1.1";
-
-  if (protocol_version < SPDY3) {
-    (*headers)["version"] = kHttpProtocolVersion;
-    (*headers)["method"] = info.method;
-    (*headers)["host"] = GetHostAndOptionalPort(info.url);
-    (*headers)["scheme"] = info.url.scheme();
-    if (direct)
-      (*headers)["url"] = HttpUtil::PathForRequest(info.url);
-    else
-      (*headers)["url"] = HttpUtil::SpecForRequest(info.url);
-  } else {
-    if (protocol_version < SPDY4) {
-      (*headers)[":version"] = kHttpProtocolVersion;
-      (*headers)[":host"] = GetHostAndOptionalPort(info.url);
-    } else {
-      (*headers)[":authority"] = GetHostAndOptionalPort(info.url);
-    }
-    (*headers)[":method"] = info.method;
-    (*headers)[":scheme"] = info.url.scheme();
-    (*headers)[":path"] = HttpUtil::PathForRequest(info.url);
   }
 }
 
@@ -147,7 +168,7 @@ void CreateSpdyHeadersFromHttpResponse(
   const std::string status_line = response_headers.GetStatusLine();
   std::string::const_iterator after_version =
       std::find(status_line.begin(), status_line.end(), ' ');
-  if (protocol_version < SPDY4) {
+  if (protocol_version < HTTP2) {
     (*headers)[version_key] = std::string(status_line.begin(), after_version);
   }
   (*headers)[status_key] = std::string(after_version + 1, status_line.end());
@@ -155,7 +176,7 @@ void CreateSpdyHeadersFromHttpResponse(
   void* iter = NULL;
   std::string raw_name, value;
   while (response_headers.EnumerateHeaderLines(&iter, &raw_name, &value)) {
-    std::string name = base::StringToLowerASCII(raw_name);
+    std::string name = base::ToLowerASCII(raw_name);
     AddSpdyHeader(name, value, headers);
   }
 }
@@ -183,28 +204,22 @@ NET_EXPORT_PRIVATE RequestPriority ConvertSpdyPriorityToRequestPriority(
 GURL GetUrlFromHeaderBlock(const SpdyHeaderBlock& headers,
                            SpdyMajorVersion protocol_version,
                            bool pushed) {
-  const char* scheme_header = protocol_version >= SPDY3 ? ":scheme" : "scheme";
-  const char* host_header = protocol_version >= SPDY4 ? ":authority" :
-      (protocol_version >= SPDY3 ? ":host" : "host");
-  const char* path_header = protocol_version >= SPDY3 ? ":path" : "url";
+  DCHECK_LE(SPDY3, protocol_version);
+  SpdyHeaderBlock::const_iterator it = headers.find(":scheme");
+  if (it == headers.end())
+    return GURL();
+  std::string url = it->second.as_string();
+  url.append("://");
 
-  std::string scheme;
-  std::string host_port;
-  std::string path;
-  SpdyHeaderBlock::const_iterator it;
-  it = headers.find(scheme_header);
-  if (it != headers.end())
-    scheme = it->second;
-  it = headers.find(host_header);
-  if (it != headers.end())
-    host_port = it->second;
-  it = headers.find(path_header);
-  if (it != headers.end())
-    path = it->second;
+  it = headers.find(protocol_version >= HTTP2 ? ":authority" : ":host");
+  if (it == headers.end())
+    return GURL();
+  url.append(it->second.as_string());
 
-  std::string url = (scheme.empty() || host_port.empty() || path.empty())
-                        ? std::string()
-                        : scheme + "://" + host_port + path;
+  it = headers.find(":path");
+  if (it == headers.end())
+    return GURL();
+  url.append(it->second.as_string());
   return GURL(url);
 }
 

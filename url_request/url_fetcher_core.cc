@@ -8,7 +8,7 @@
 
 #include "base/bind.h"
 #include "base/logging.h"
-#include "base/metrics/histogram.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/profiler/scoped_tracker.h"
 #include "base/sequenced_task_runner.h"
 #include "base/single_thread_task_runner.h"
@@ -83,6 +83,9 @@ URLFetcherCore::URLFetcherCore(URLFetcher* fetcher,
       buffer_(new IOBuffer(kBufferSize)),
       url_request_data_key_(NULL),
       was_fetched_via_proxy_(false),
+      was_cached_(false),
+      received_response_content_length_(0),
+      total_received_bytes_(0),
       upload_content_set_(false),
       upload_range_offset_(0),
       upload_range_length_(0),
@@ -316,6 +319,18 @@ bool URLFetcherCore::WasFetchedViaProxy() const {
   return was_fetched_via_proxy_;
 }
 
+bool URLFetcherCore::WasCached() const {
+  return was_cached_;
+}
+
+int64_t URLFetcherCore::GetReceivedResponseContentLength() const {
+  return received_response_content_length_;
+}
+
+int64_t URLFetcherCore::GetTotalReceivedBytes() const {
+  return total_received_bytes_;
+}
+
 const GURL& URLFetcherCore::GetOriginalURL() const {
   return original_url_;
 }
@@ -393,17 +408,14 @@ void URLFetcherCore::OnReceivedRedirect(URLRequest* request,
     url_ = redirect_info.new_url;
     response_code_ = request_->GetResponseCode();
     was_fetched_via_proxy_ = request_->was_fetched_via_proxy();
+    was_cached_ = request_->was_cached();
+    total_received_bytes_ += request_->GetTotalReceivedBytes();
     request->Cancel();
     OnReadCompleted(request, 0);
   }
 }
 
 void URLFetcherCore::OnResponseStarted(URLRequest* request) {
-  // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is fixed.
-  tracked_objects::ScopedTracker tracking_profile(
-      FROM_HERE_WITH_EXPLICIT_FUNCTION(
-          "423948 URLFetcherCore::OnResponseStarted"));
-
   DCHECK_EQ(request, request_.get());
   DCHECK(network_task_runner_->BelongsToCurrentThread());
   if (request_->status().is_success()) {
@@ -411,6 +423,7 @@ void URLFetcherCore::OnResponseStarted(URLRequest* request) {
     response_headers_ = request_->response_headers();
     socket_address_ = request_->GetSocketAddress();
     was_fetched_via_proxy_ = request_->was_fetched_via_proxy();
+    was_cached_ = request_->was_cached();
     total_response_bytes_ = request_->GetExpectedContentSize();
   }
 
@@ -432,11 +445,6 @@ void URLFetcherCore::OnCertificateRequested(
 
 void URLFetcherCore::OnReadCompleted(URLRequest* request,
                                      int bytes_read) {
-  // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is fixed.
-  tracked_objects::ScopedTracker tracking_profile(
-      FROM_HERE_WITH_EXPLICIT_FUNCTION(
-          "423948 URLFetcherCore::OnReadCompleted"));
-
   DCHECK(request == request_);
   DCHECK(network_task_runner_->BelongsToCurrentThread());
 
@@ -444,36 +452,15 @@ void URLFetcherCore::OnReadCompleted(URLRequest* request,
     url_ = request->url();
   URLRequestThrottlerManager* throttler_manager =
       request->context()->throttler_manager();
-  if (throttler_manager) {
-    // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is fixed.
-    tracked_objects::ScopedTracker tracking_profile1(
-        FROM_HERE_WITH_EXPLICIT_FUNCTION(
-            "423948 URLFetcherCore::OnReadCompleted1"));
-
+  if (throttler_manager)
     url_throttler_entry_ = throttler_manager->RegisterRequestUrl(url_);
-  }
-
-  // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is fixed.
-  tracked_objects::ScopedTracker tracking_profile2(
-      FROM_HERE_WITH_EXPLICIT_FUNCTION(
-          "423948 URLFetcherCore::OnReadCompleted2"));
 
   do {
     if (!request_->status().is_success() || bytes_read <= 0)
       break;
 
-    // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is fixed.
-    tracked_objects::ScopedTracker tracking_profile3(
-        FROM_HERE_WITH_EXPLICIT_FUNCTION(
-            "423948 URLFetcherCore::OnReadCompleted3"));
-
     current_response_bytes_ += bytes_read;
     InformDelegateDownloadProgress();
-
-    // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is fixed.
-    tracked_objects::ScopedTracker tracking_profile4(
-        FROM_HERE_WITH_EXPLICIT_FUNCTION(
-            "423948 URLFetcherCore::OnReadCompleted4"));
 
     const int result =
         WriteBuffer(new DrainableIOBuffer(buffer_.get(), bytes_read));
@@ -484,42 +471,28 @@ void URLFetcherCore::OnReadCompleted(URLRequest* request,
   } while (request_->Read(buffer_.get(), kBufferSize, &bytes_read));
 
   const URLRequestStatus status = request_->status();
-
-  // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is fixed.
-  tracked_objects::ScopedTracker tracking_profile5(
-      FROM_HERE_WITH_EXPLICIT_FUNCTION(
-          "423948 URLFetcherCore::OnReadCompleted5"));
-
   if (status.is_success())
     request_->GetResponseCookies(&cookies_);
 
   // See comments re: HEAD requests in ReadResponse().
   if (!status.is_io_pending() || request_type_ == URLFetcher::HEAD) {
-    // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is fixed.
-    tracked_objects::ScopedTracker tracking_profile6(
-        FROM_HERE_WITH_EXPLICIT_FUNCTION(
-            "423948 URLFetcherCore::OnReadCompleted6"));
-
     status_ = status;
+    received_response_content_length_ =
+        request_->received_response_content_length();
+    total_received_bytes_ += request_->GetTotalReceivedBytes();
     ReleaseRequest();
-
-    // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is fixed.
-    tracked_objects::ScopedTracker tracking_profile7(
-        FROM_HERE_WITH_EXPLICIT_FUNCTION(
-            "423948 URLFetcherCore::OnReadCompleted7"));
 
     // No more data to write.
     const int result = response_writer_->Finish(
         base::Bind(&URLFetcherCore::DidFinishWriting, this));
-
-    // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is fixed.
-    tracked_objects::ScopedTracker tracking_profile8(
-        FROM_HERE_WITH_EXPLICIT_FUNCTION(
-            "423948 URLFetcherCore::OnReadCompleted8"));
-
     if (result != ERR_IO_PENDING)
       DidFinishWriting(result);
   }
+}
+
+void URLFetcherCore::OnContextShuttingDown() {
+  DCHECK(request_);
+  CancelRequestAndInformDelegate(ERR_CONTEXT_SHUT_DOWN);
 }
 
 void URLFetcherCore::CancelAll() {
@@ -561,13 +534,19 @@ void URLFetcherCore::StartURLRequest() {
     return;
   }
 
+  if (!request_context_getter_->GetURLRequestContext()) {
+    CancelRequestAndInformDelegate(ERR_CONTEXT_SHUT_DOWN);
+    return;
+  }
+
   DCHECK(request_context_getter_.get());
   DCHECK(!request_.get());
 
   g_registry.Get().AddURLFetcherCore(this);
   current_response_bytes_ = 0;
+  request_context_getter_->AddObserver(this);
   request_ = request_context_getter_->GetURLRequestContext()->CreateRequest(
-      original_url_, DEFAULT_PRIORITY, this, NULL);
+      original_url_, DEFAULT_PRIORITY, this);
   request_->set_stack_trace(stack_trace_);
   int flags = request_->load_flags() | load_flags_;
 
@@ -589,7 +568,7 @@ void URLFetcherCore::StartURLRequest() {
 
     case URLFetcher::POST:
     case URLFetcher::PUT:
-    case URLFetcher::PATCH:
+    case URLFetcher::PATCH: {
       // Upload content must be set.
       DCHECK(is_chunked_upload_ || upload_content_set_);
 
@@ -623,14 +602,14 @@ void URLFetcherCore::StartURLRequest() {
       current_upload_bytes_ = -1;
       // TODO(kinaba): http://crbug.com/118103. Implement upload callback in the
       //  layer and avoid using timer here.
-      upload_progress_checker_timer_.reset(
-          new base::RepeatingTimer<URLFetcherCore>());
+      upload_progress_checker_timer_.reset(new base::RepeatingTimer());
       upload_progress_checker_timer_->Start(
           FROM_HERE,
           base::TimeDelta::FromMilliseconds(kUploadProgressTimerInterval),
           this,
           &URLFetcherCore::InformDelegateUploadProgress);
       break;
+    }
 
     case URLFetcher::HEAD:
       request_->set_method("HEAD");
@@ -652,10 +631,7 @@ void URLFetcherCore::StartURLRequest() {
 
 void URLFetcherCore::DidInitializeWriter(int result) {
   if (result != OK) {
-    CancelURLRequest(result);
-    delegate_task_runner_->PostTask(
-        FROM_HERE,
-        base::Bind(&URLFetcherCore::InformDelegateFetchIsComplete, this));
+    CancelRequestAndInformDelegate(result);
     return;
   }
   StartURLRequestWhenAppropriate();
@@ -669,27 +645,33 @@ void URLFetcherCore::StartURLRequestWhenAppropriate() {
 
   DCHECK(request_context_getter_.get());
 
-  int64 delay = INT64_C(0);
-  if (!original_url_throttler_entry_.get()) {
-    URLRequestThrottlerManager* manager =
-        request_context_getter_->GetURLRequestContext()->throttler_manager();
-    if (manager) {
+  // Check if the request should be delayed, and if so, post a task to start it
+  // after the delay has expired.  Otherwise, start it now.
+
+  URLRequestContext* context = request_context_getter_->GetURLRequestContext();
+  // If the context has been shut down, or there's no ThrottlerManager, just
+  // start the request.  In the former case, StartURLRequest() will just inform
+  // the URLFetcher::Delegate the request has been canceled.
+  if (context && context->throttler_manager()) {
+    if (!original_url_throttler_entry_.get()) {
       original_url_throttler_entry_ =
-          manager->RegisterRequestUrl(original_url_);
+          context->throttler_manager()->RegisterRequestUrl(original_url_);
+    }
+
+    if (original_url_throttler_entry_.get()) {
+      int64 delay =
+          original_url_throttler_entry_->ReserveSendingTimeForNextRequest(
+              GetBackoffReleaseTime());
+      if (delay != 0) {
+        base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
+            FROM_HERE, base::Bind(&URLFetcherCore::StartURLRequest, this),
+            base::TimeDelta::FromMilliseconds(delay));
+        return;
+      }
     }
   }
-  if (original_url_throttler_entry_.get()) {
-    delay = original_url_throttler_entry_->ReserveSendingTimeForNextRequest(
-        GetBackoffReleaseTime());
-  }
 
-  if (delay == INT64_C(0)) {
-    StartURLRequest();
-  } else {
-    base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-        FROM_HERE, base::Bind(&URLFetcherCore::StartURLRequest, this),
-        base::TimeDelta::FromMilliseconds(delay));
-  }
+  StartURLRequest();
 }
 
 void URLFetcherCore::CancelURLRequest(int error) {
@@ -706,8 +688,7 @@ void URLFetcherCore::CancelURLRequest(int error) {
   // URLRequestJob::NotifyDone(). But, because the request was released
   // immediately after being canceled, the request could not call
   // OnReadCompleted() which overwrites |status_| with the error status.
-  status_.set_status(URLRequestStatus::CANCELED);
-  status_.set_error(error);
+  status_ = URLRequestStatus(URLRequestStatus::CANCELED, error);
 
   // Release the reference to the request context. There could be multiple
   // references to URLFetcher::Core at this point so it may take a while to
@@ -755,10 +736,7 @@ void URLFetcherCore::NotifyMalformedContent() {
 
 void URLFetcherCore::DidFinishWriting(int result) {
   if (result != OK) {
-    CancelURLRequest(result);
-    delegate_task_runner_->PostTask(
-        FROM_HERE,
-        base::Bind(&URLFetcherCore::InformDelegateFetchIsComplete, this));
+    CancelRequestAndInformDelegate(result);
     return;
   }
   // If the file was successfully closed, then the URL request is complete.
@@ -820,7 +798,15 @@ void URLFetcherCore::RetryOrCompleteUrlFetch() {
   DCHECK(posted || !delegate_);
 }
 
+void URLFetcherCore::CancelRequestAndInformDelegate(int result) {
+  CancelURLRequest(result);
+  delegate_task_runner_->PostTask(
+      FROM_HERE,
+      base::Bind(&URLFetcherCore::InformDelegateFetchIsComplete, this));
+}
+
 void URLFetcherCore::ReleaseRequest() {
+  request_context_getter_->RemoveObserver(this);
   upload_progress_checker_timer_.reset();
   request_.reset();
   g_registry.Get().RemoveURLFetcherCore(this);
@@ -879,11 +865,8 @@ int URLFetcherCore::WriteBuffer(scoped_refptr<DrainableIOBuffer> data) {
 void URLFetcherCore::DidWriteBuffer(scoped_refptr<DrainableIOBuffer> data,
                                     int result) {
   if (result < 0) {  // Handle errors.
-    CancelURLRequest(result);
     response_writer_->Finish(base::Bind(&EmptyCompletionCallback));
-    delegate_task_runner_->PostTask(
-        FROM_HERE,
-        base::Bind(&URLFetcherCore::InformDelegateFetchIsComplete, this));
+    CancelRequestAndInformDelegate(result);
     return;
   }
 
@@ -944,17 +927,12 @@ void URLFetcherCore::InformDelegateUploadProgressInDelegateThread(
 }
 
 void URLFetcherCore::InformDelegateDownloadProgress() {
-  // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is fixed.
-  tracked_objects::ScopedTracker tracking_profile1(
-      FROM_HERE_WITH_EXPLICIT_FUNCTION(
-          "423948 URLFetcherCore::InformDelegateDownloadProgress1"));
-
   DCHECK(network_task_runner_->BelongsToCurrentThread());
 
-  // TODO(vadimt): Remove ScopedTracker below once crbug.com/423948 is fixed.
+  // TODO(pkasting): Remove ScopedTracker below once crbug.com/455952 is fixed.
   tracked_objects::ScopedTracker tracking_profile2(
       FROM_HERE_WITH_EXPLICIT_FUNCTION(
-          "423948 URLFetcherCore::InformDelegateDownloadProgress2"));
+          "455952 delegate_task_runner_->PostTask()"));
 
   delegate_task_runner_->PostTask(
       FROM_HERE,

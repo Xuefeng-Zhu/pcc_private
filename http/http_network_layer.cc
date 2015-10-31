@@ -19,7 +19,6 @@
 
 namespace net {
 
-//-----------------------------------------------------------------------------
 HttpNetworkLayer::HttpNetworkLayer(HttpNetworkSession* session)
     : session_(session),
       suspended_(false) {
@@ -38,24 +37,6 @@ HttpNetworkLayer::~HttpNetworkLayer() {
     power_monitor->RemoveObserver(this);
 #endif
 }
-
-//-----------------------------------------------------------------------------
-
-// static
-HttpTransactionFactory* HttpNetworkLayer::CreateFactory(
-    HttpNetworkSession* session) {
-  DCHECK(session);
-
-  return new HttpNetworkLayer(session);
-}
-
-// static
-void HttpNetworkLayer::ForceAlternateProtocol() {
-  AlternateProtocolInfo pair(443, NPN_SPDY_3, 1);
-  HttpServerPropertiesImpl::ForceAlternateProtocol(pair);
-}
-
-//-----------------------------------------------------------------------------
 
 int HttpNetworkLayer::CreateTransaction(RequestPriority priority,
                                         scoped_ptr<HttpTransaction>* trans) {
