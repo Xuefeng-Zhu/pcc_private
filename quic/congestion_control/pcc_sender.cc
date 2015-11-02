@@ -72,7 +72,10 @@ bool PCCSender::OnPacketSent(
   QuicTime::Delta delay = QuicTime::Delta::FromMicroseconds(
     bytes * 8 * base::Time::kMicrosecondsPerSecond / pcc_utility_.GetCurrentRate());
   ideal_next_packet_send_time_ = sent_time.Add(delay);
-  printf("sent\n");
+  QuicTime::Delta time = sent_time.Subtract(QuicTime::Zero());
+  printf("sent time: %ld\n", time.ToMicroseconds());
+  printf("sent at rate %f\n", pcc_utility_.GetCurrentRate());
+  printf("sent sequence_number%lu\n", packet_number);
   return true;
 }
 
@@ -136,6 +139,7 @@ void PCCSender::EndMonitor(MonitorNumber monitor_num) {
 }
 
 MonitorNumber PCCSender::GetMonitor(QuicPacketNumber sequence_number) {
+  printf("ack sequence_number%lu\n", sequence_number);
   MonitorNumber result = current_monitor_;
 
   do {
@@ -204,7 +208,7 @@ CongestionControlType PCCSender::GetCongestionControlType() const {
 }
 
 PCCUtility::PCCUtility()
-  : current_rate_(1),
+  : current_rate_(3000000),
     previous_utility_(-10000),
     previous_rtt_(0),
     if_starting_phase_(false),
