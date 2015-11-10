@@ -108,11 +108,14 @@ void PCCSender::OnCongestionEvent(
   for (CongestionVector::const_iterator it = lost_packets.cbegin();
       it != lost_packets.cend(); ++it) {
     MonitorNumber monitor_num = GetMonitor(it->first);
+    if (monitor_num == -1) {
+      continue;
+    }
     int pos = it->first - monitors_[monitor_num].start_seq_num;
     monitors_[monitor_num].packet_vector[pos].state = ACK;
 
     if (it->first == monitors_[monitor_num].end_seq_num) {
-      EndMonitor(it->first);
+      EndMonitor(monitor_num);
     }
   }
 
@@ -120,11 +123,14 @@ void PCCSender::OnCongestionEvent(
       it != acked_packets.cend(); ++it) {
 
     MonitorNumber monitor_num = GetMonitor(it->first);
+    if (monitor_num == -1) {
+      continue;
+    }
     int pos = it->first - monitors_[monitor_num].start_seq_num;
     monitors_[monitor_num].packet_vector[pos].state = LOST;
 
     if (it->first == monitors_[monitor_num].end_seq_num) {
-      EndMonitor(it->first);
+      EndMonitor(monitor_num);
     }
   }
 }
@@ -211,7 +217,7 @@ PCCUtility::PCCUtility()
   : current_rate_(3000000),
     previous_utility_(-10000),
     previous_rtt_(0),
-    if_starting_phase_(false),
+    if_starting_phase_(true),
     previous_monitor_(-1),
     if_make_guess_(false),
     if_recording_guess_(false),
