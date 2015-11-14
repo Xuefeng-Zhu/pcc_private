@@ -70,12 +70,12 @@ bool PCCSender::OnPacketSent(
   packet_info.bytes = bytes;
   monitors_[current_monitor_].packet_vector.push_back(packet_info);
   QuicTime::Delta delay = QuicTime::Delta::FromMicroseconds(
-    bytes * 8 * base::Time::kMicrosecondsPerSecond / pcc_utility_.GetCurrentRate());
+    bytes * 8  * base::Time::kMicrosecondsPerSecond / pcc_utility_.GetCurrentRate() / 1024 / 1024);
   ideal_next_packet_send_time_ = sent_time.Add(delay);
   QuicTime::Delta time = sent_time.Subtract(QuicTime::Zero());
   printf("sent time: %ld\n", time.ToMicroseconds());
   printf("sent at rate %f\n", pcc_utility_.GetCurrentRate());
-  printf("sent sequence_number%lu\n", packet_number);
+  printf("sent sequence_number%lu\n\n", packet_number);
   return true;
 }
 
@@ -85,18 +85,20 @@ void PCCSender::StartMonitor(QuicTime sent_time){
 
   // calculate monitor interval and monitor end time
   double rand_factor = double(rand() % 3) / 10;
-  int64 srtt = rtt_stats_->smoothed_rtt().ToMicroseconds();
+  int64 srtt = rtt_stats_->latest_rtt().ToMicroseconds();
   if (srtt == 0) {
     srtt = rtt_stats_->initial_rtt_us();
   }
-  QuicTime::Delta monitor_interval = 
+  QuicTime::Delta monitor_interval =
       QuicTime::Delta::FromMicroseconds(srtt * (1.5 + rand_factor));
+  printf("rtt %ld\n\n", srtt);
   current_monitor_end_time_ = sent_time.Add(monitor_interval);
 
   monitors_[current_monitor_].state = SENDING;
-  monitors_[current_monitor_].start_time = sent_time; 
+  monitors_[current_monitor_].start_time = sent_time;
   monitors_[current_monitor_].end_time = QuicTime::Zero();
   monitors_[current_monitor_].end_transmission_time = QuicTime::Zero();
+  printf("StartMonitor monitor_num %u\n", current_monitor_);
 
 }
 
@@ -112,11 +114,13 @@ void PCCSender::OnCongestionEvent(
       continue;
     }
     int pos = it->first - monitors_[monitor_num].start_seq_num;
-    monitors_[monitor_num].packet_vector[pos].state = ACK;
+    monitors_[monitor_num].packet_vector[pos].state = LOST;
 
     if (it->first == monitors_[monitor_num].end_seq_num) {
       EndMonitor(monitor_num);
     }
+
+    printf("lost sequence_number%lu\n\n", it->first);
   }
 
   for (CongestionVector::const_iterator it = acked_packets.cbegin();
@@ -127,7 +131,7 @@ void PCCSender::OnCongestionEvent(
       continue;
     }
     int pos = it->first - monitors_[monitor_num].start_seq_num;
-    monitors_[monitor_num].packet_vector[pos].state = LOST;
+    monitors_[monitor_num].packet_vector[pos].state = ACK;
 
     if (it->first == monitors_[monitor_num].end_seq_num) {
       EndMonitor(monitor_num);
@@ -136,23 +140,25 @@ void PCCSender::OnCongestionEvent(
 }
 
 void PCCSender::EndMonitor(MonitorNumber monitor_num) {
+  printf("EndMonitor monitor_num %u\n", monitor_num);
   if (monitors_[monitor_num].state == WAITING){
     monitors_[monitor_num].state = FINISHED;
     pcc_utility_.OnMonitorEnd(monitors_[monitor_num],
                               rtt_stats_, current_monitor_,
                               monitor_num);
+    printf("EndMonitor\n");
   }
 }
 
 MonitorNumber PCCSender::GetMonitor(QuicPacketNumber sequence_number) {
-  printf("ack sequence_number%lu\n", sequence_number);
+  printf("ack sequence_number%lu\n\n", sequence_number);
   MonitorNumber result = current_monitor_;
 
   do {
     int diff = sequence_number - monitors_[result].start_seq_num;
     if (diff >= 0 && diff < (int)monitors_[result].packet_vector.size()) {
       return result;
-    } 
+    }
 
     result = (result + 99) % NUM_MONITOR;
   } while (result != current_monitor_);
@@ -214,7 +220,7 @@ CongestionControlType PCCSender::GetCongestionControlType() const {
 }
 
 PCCUtility::PCCUtility()
-  : current_rate_(3000000),
+  : current_rate_(100),
     previous_utility_(-10000),
     previous_rtt_(0),
     if_starting_phase_(true),
@@ -256,13 +262,15 @@ void PCCUtility::OnMonitorStart(MonitorNumber current_monitor) {
       for (int i = 0; i < NUMBER_OF_PROBE; i += 2) {
         int rand_dir = rand() % 2 * 2 - 1;
 
-        guess_stat_bucket[i].rate = current_rate_ 
+        guess_stat_bucket[i].rate = current_rate_
             + rand_dir * continous_guess_count_ * GRANULARITY * current_rate_;
-        guess_stat_bucket[i + 1].rate = current_rate_ 
-            - rand_dir * continous_guess_count_ * GRANULARITY * current_rate_;  
-  
+        guess_stat_bucket[i + 1].rate = current_rate_
+            - rand_dir * continous_guess_count_ * GRANULARITY * current_rate_;
+        printf("guess at rate %f\n", guess_stat_bucket[i].rate);
+
       }
 
+    printf("guess monitor_num %u\n", current_monitor);
       for (int i = 0; i < NUMBER_OF_PROBE; i++) {
         guess_stat_bucket[i].monitor = (current_monitor + i) % NUM_MONITOR;
       }
@@ -287,14 +295,18 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
   double loss = 0;
   GetBytesSum(pcc_monitor.packet_vector, total, loss);
 
-  int64 time = 
+  int64 time =
       pcc_monitor.end_transmission_time.Subtract(pcc_monitor.start_time).ToMicroseconds();
 
-  int64 srtt = rtt_stats->smoothed_rtt().ToMicroseconds();
+  int64 srtt = rtt_stats->latest_rtt().ToMicroseconds();
   if (previous_rtt_ == 0) previous_rtt_ = srtt;
 
   double current_utility = ((total-loss)/time*(1-1/(1+exp(-1000*(loss/total-0.05))))
       * (1-1/(1+exp(-80*(1-previous_rtt_/srtt)))) - 1*loss/time) / 1*1000;
+
+  printf("loss %f\n", loss);
+  printf("total %f\n", total);
+
 
   previous_rtt_ = srtt;
 
@@ -333,15 +345,20 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
       }
     }
 
+    printf("num_recorded_%d\n", num_recorded_);
     if (num_recorded_ == NUMBER_OF_PROBE) {
       num_recorded_ = 0;
       int decision = 0;
 
       for (int i = 0; i < NUMBER_OF_PROBE; i += 2) {
-        bool case1 = guess_stat_bucket[i].utility > guess_stat_bucket[i+1].utility 
+        bool case1 = guess_stat_bucket[i].utility > guess_stat_bucket[i+1].utility
             && guess_stat_bucket[i].rate > guess_stat_bucket[i+1].rate;
-        bool case2 = guess_stat_bucket[i].utility < guess_stat_bucket[i+1].utility 
-            && guess_stat_bucket[i].rate < guess_stat_bucket[i+1].rate; 
+        bool case2 = guess_stat_bucket[i].utility < guess_stat_bucket[i+1].utility
+            && guess_stat_bucket[i].rate < guess_stat_bucket[i+1].rate;
+      printf("rate1 %f\n", guess_stat_bucket[i].rate);
+      printf("utility1 %f\n", guess_stat_bucket[i].utility);
+      printf("rate2 %f\n", guess_stat_bucket[i+1].rate);
+      printf("utility2 %f\n", guess_stat_bucket[i+1].utility);
 
         if (case1 || case2) {
           decision += 1;
@@ -355,22 +372,29 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
         if_make_guess_ = true;
       } else {
         change_direction_ = decision > 0 ? 1 : -1;
+        printf("change direction %d\n", change_direction_);
         change_intense_ = 1;
-        double change_amount = (continous_guess_count_/2+1) 
+        double change_amount = (continous_guess_count_/2+1)
             * change_intense_ * change_direction_ * GRANULARITY * current_rate_;
-        current_rate_ += change_amount; 
+        current_rate_ += change_amount;
 
         previous_utility_ = 0;
         continous_guess_count_ = 0;
         tartger_monitor_ = (current_monitor + 1) % NUM_MONITOR;
+        printf("tartget monitor_num %u\n", tartger_monitor_);
         if_initial_moving_phase_ = true;
       }
       return;
     }
+  }
 
     // moving phase
+    printf("tartget monitor_num %u\n", tartger_monitor_);
+    printf("end monitor_num %u\n", end_monitor);
     if (end_monitor == tartger_monitor_) {
-      double tmp_rate = total * 12 / time / 1000;
+      double tmp_rate = total * 8 / time;
+      printf("current rate %f\n", current_rate_);
+      printf("tmp rate %f\n", tmp_rate);
       if (current_rate_ - tmp_rate > 10 && current_rate_ > 200) {
         current_rate_ = tmp_rate;
 
@@ -388,8 +412,8 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
         change_intense_ += 1;
         tartger_monitor_ = (current_monitor + 1) % NUM_MONITOR;
       }
-      
-      double change_amount = 
+
+      double change_amount =
           change_intense_ * GRANULARITY * current_rate_ * change_direction_;
       previous_utility_ = current_utility;
 
@@ -403,7 +427,6 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
       }
     }
 
-  }
 }
 
 void PCCUtility::GetBytesSum(std::vector<PacketInfo> packet_vector,
