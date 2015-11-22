@@ -220,7 +220,7 @@ CongestionControlType PCCSender::GetCongestionControlType() const {
 }
 
 PCCUtility::PCCUtility()
-  : current_rate_(100),
+  : current_rate_(10),
     previous_utility_(-10000),
     previous_rtt_(0),
     if_starting_phase_(true),
