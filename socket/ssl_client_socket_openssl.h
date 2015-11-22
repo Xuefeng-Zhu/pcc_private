@@ -7,6 +7,7 @@
 
 #include <openssl/base.h>
 #include <openssl/ssl.h>
+#include <stdint.h>
 
 #include <string>
 #include <vector>
@@ -33,7 +34,6 @@ class CertVerifier;
 class CTVerifier;
 class SSLCertRequestInfo;
 class SSLInfo;
-class SSLPrivateKey;
 
 // An SSL client socket implemented with OpenSSL.
 class SSLClientSocketOpenSSL : public SSLClientSocket {
@@ -52,6 +52,9 @@ class SSLClientSocketOpenSSL : public SSLClientSocket {
   const std::string& ssl_session_cache_shard() const {
     return ssl_session_cache_shard_;
   }
+
+  // Export ssl key log files if env variable is not set.
+  static void SetSSLKeyLogFile(const std::string& ssl_keylog_file);
 
   // SSLClientSocket implementation.
   void GetSSLCertRequestInfo(SSLCertRequestInfo* cert_request_info) override;
@@ -83,6 +86,7 @@ class SSLClientSocketOpenSSL : public SSLClientSocket {
   void GetConnectionAttempts(ConnectionAttempts* out) const override;
   void ClearConnectionAttempts() override {}
   void AddConnectionAttempts(const ConnectionAttempts& attempts) override {}
+  int64_t GetTotalReceivedBytes() const override;
 
   // Socket implementation.
   int Read(IOBuffer* buf,
@@ -205,6 +209,13 @@ class SSLClientSocketOpenSSL : public SSLClientSocket {
   void OnPrivateKeySignComplete(Error error,
                                 const std::vector<uint8_t>& signature);
 
+  int TokenBindingAdd(const uint8_t** out,
+                      size_t* out_len,
+                      int* out_alert_value);
+  int TokenBindingParse(const uint8_t* contents,
+                        size_t contents_len,
+                        int* out_alert_value);
+
   bool transport_send_busy_;
   bool transport_recv_busy_;
 
@@ -276,6 +287,8 @@ class SSLClientSocketOpenSSL : public SSLClientSocket {
 
   // The service for retrieving Channel ID keys.  May be NULL.
   ChannelIDService* channel_id_service_;
+  bool tb_was_negotiated_;
+  TokenBindingParam tb_negotiated_param_;
 
   // OpenSSL stuff
   SSL* ssl_;
@@ -319,7 +332,6 @@ class SSLClientSocketOpenSSL : public SSLClientSocket {
   ChannelIDService::Request channel_id_request_;
   SSLFailureState ssl_failure_state_;
 
-  scoped_ptr<SSLPrivateKey> private_key_;
   int signature_result_;
   std::vector<uint8_t> signature_;
 

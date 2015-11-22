@@ -31,6 +31,7 @@ HttpServerPropertiesImpl::HttpServerPropertiesImpl()
       spdy_settings_map_(SpdySettingsMap::NO_AUTO_EVICT),
       server_network_stats_map_(ServerNetworkStatsMap::NO_AUTO_EVICT),
       alternative_service_probability_threshold_(1.0),
+      quic_server_info_map_(kMaxQuicServersToPersist),
       weak_ptr_factory_(this) {
   canonical_suffixes_.push_back(".c.youtube.com");
   canonical_suffixes_.push_back(".googlevideo.com");
@@ -55,49 +56,12 @@ void HttpServerPropertiesImpl::InitializeSpdyServers(
 
 void HttpServerPropertiesImpl::InitializeAlternativeServiceServers(
     AlternativeServiceMap* alternative_service_map) {
-  for (AlternativeServiceMap::iterator map_it =
-           alternative_service_map_.begin();
-       map_it != alternative_service_map_.end();) {
-    for (AlternativeServiceInfoVector::iterator it = map_it->second.begin();
-         it != map_it->second.end();) {
-      // Keep all the broken ones since those do not get persisted.
-      AlternativeService alternative_service(it->alternative_service);
-      if (alternative_service.host.empty()) {
-        alternative_service.host = map_it->first.host();
-      }
-      if (IsAlternativeServiceBroken(alternative_service)) {
-        ++it;
-        continue;
-      }
-      it = map_it->second.erase(it);
-    }
-    if (map_it->second.empty()) {
-      RemoveCanonicalHost(map_it->first);
-      map_it = alternative_service_map_.Erase(map_it);
-      continue;
-    }
-    ++map_it;
-  }
-
   // Add the entries from persisted data.
   for (AlternativeServiceMap::reverse_iterator input_it =
            alternative_service_map->rbegin();
        input_it != alternative_service_map->rend(); ++input_it) {
     DCHECK(!input_it->second.empty());
-    AlternativeServiceMap::iterator output_it =
-        alternative_service_map_.Peek(input_it->first);
-    if (output_it == alternative_service_map_.end()) {
-      // There is no value in alternative_service_map_ for input_it->first:
-      // inserting in AlternativeServiceVectorInfo.
-      alternative_service_map_.Put(input_it->first, input_it->second);
-      continue;
-    }
-    // There are some broken alternative services in alternative_service_map_
-    // for input_it->first: appending AlternativeServiceInfo one by one.
-    for (const AlternativeServiceInfo& alternative_service_info :
-         input_it->second) {
-      output_it->second.push_back(alternative_service_info);
-    }
+    alternative_service_map_.Put(input_it->first, input_it->second);
   }
 
   // Attempt to find canonical servers.
@@ -151,6 +115,14 @@ void HttpServerPropertiesImpl::InitializeServerNetworkStats(
   }
 }
 
+void HttpServerPropertiesImpl::InitializeQuicServerInfoMap(
+    QuicServerInfoMap* quic_server_info_map) {
+  for (const std::pair<QuicServerId, std::string>& entry :
+       *quic_server_info_map) {
+    quic_server_info_map_.Put(entry.first, entry.second);
+  }
+}
+
 void HttpServerPropertiesImpl::GetSpdyServerList(
     base::ListValue* spdy_server_list,
     size_t max_size) const {
@@ -181,6 +153,7 @@ void HttpServerPropertiesImpl::Clear() {
   spdy_settings_map_.Clear();
   last_quic_address_.clear();
   server_network_stats_map_.Clear();
+  quic_server_info_map_.Clear();
 }
 
 bool HttpServerPropertiesImpl::SupportsRequestPriority(
@@ -284,7 +257,8 @@ AlternativeServiceVector HttpServerPropertiesImpl::GetAlternativeServices(
         it = map_it->second.erase(it);
         continue;
       }
-      if (it->probability < alternative_service_probability_threshold_) {
+      if (it->probability == 0 ||
+          it->probability < alternative_service_probability_threshold_) {
         ++it;
         continue;
       }
@@ -599,6 +573,29 @@ const ServerNetworkStats* HttpServerPropertiesImpl::GetServerNetworkStats(
 const ServerNetworkStatsMap&
 HttpServerPropertiesImpl::server_network_stats_map() const {
   return server_network_stats_map_;
+}
+
+bool HttpServerPropertiesImpl::SetQuicServerInfo(
+    const QuicServerId& server_id,
+    const std::string& server_info) {
+  QuicServerInfoMap::iterator it = quic_server_info_map_.Peek(server_id);
+  bool changed =
+      (it == quic_server_info_map_.end() || it->second != server_info);
+  quic_server_info_map_.Put(server_id, server_info);
+  return changed;
+}
+
+const std::string* HttpServerPropertiesImpl::GetQuicServerInfo(
+    const QuicServerId& server_id) {
+  QuicServerInfoMap::iterator it = quic_server_info_map_.Get(server_id);
+  if (it == quic_server_info_map_.end())
+    return nullptr;
+  return &it->second;
+}
+
+const QuicServerInfoMap& HttpServerPropertiesImpl::quic_server_info_map()
+    const {
+  return quic_server_info_map_;
 }
 
 void HttpServerPropertiesImpl::SetAlternativeServiceProbabilityThreshold(

@@ -35,8 +35,6 @@
 #include "base/values.h"
 #include "net/base/address_family.h"
 #include "net/base/address_list.h"
-#include "net/base/dns_reloader.h"
-#include "net/base/dns_util.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/ip_endpoint.h"
 #include "net/base/net_errors.h"
@@ -45,8 +43,10 @@
 #include "net/dns/dns_client.h"
 #include "net/dns/dns_config_service.h"
 #include "net/dns/dns_protocol.h"
+#include "net/dns/dns_reloader.h"
 #include "net/dns/dns_response.h"
 #include "net/dns/dns_transaction.h"
+#include "net/dns/dns_util.h"
 #include "net/dns/host_resolver_proc.h"
 #include "net/log/net_log.h"
 #include "net/socket/client_socket_factory.h"
@@ -675,9 +675,8 @@ class HostResolverImpl::ProcTask
       return;
     }
 
-    net_log_.AddEvent(
-        NetLog::TYPE_HOST_RESOLVER_IMPL_ATTEMPT_STARTED,
-        NetLog::IntegerCallback("attempt_number", attempt_number_));
+    net_log_.AddEvent(NetLog::TYPE_HOST_RESOLVER_IMPL_ATTEMPT_STARTED,
+                      NetLog::IntCallback("attempt_number", attempt_number_));
 
     // If we don't get the results within a given time, RetryIfNotComplete
     // will start a new attempt on a different worker thread if none of our
@@ -777,8 +776,7 @@ class HostResolverImpl::ProcTask
                                     error,
                                     os_error);
     } else {
-      net_log_callback = NetLog::IntegerCallback("attempt_number",
-                                                 attempt_number);
+      net_log_callback = NetLog::IntCallback("attempt_number", attempt_number);
     }
     net_log_.AddEvent(NetLog::TYPE_HOST_RESOLVER_IMPL_ATTEMPT_FINISHED,
                       net_log_callback);
@@ -1288,9 +1286,7 @@ class HostResolverImpl::Job : public PrioritizedDispatcher::Job,
     // else CompleteRequests logged EndEvent.
 
     // Log any remaining Requests as cancelled.
-    for (RequestsList::const_iterator it = requests_.begin();
-         it != requests_.end(); ++it) {
-      Request* req = *it;
+    for (const scoped_ptr<Request>& req : requests_) {
       if (req->was_canceled())
         continue;
       DCHECK_EQ(this, req->job());
@@ -1732,10 +1728,7 @@ class HostResolverImpl::Job : public PrioritizedDispatcher::Job,
       resolver_->CacheResult(key_, entry, ttl);
 
     // Complete all of the requests that were attached to the job.
-    for (RequestsList::const_iterator it = requests_.begin();
-         it != requests_.end(); ++it) {
-      Request* req = *it;
-
+    for (const scoped_ptr<Request>& req : requests_) {
       if (req->was_canceled())
         continue;
 
@@ -1809,7 +1802,7 @@ class HostResolverImpl::Job : public PrioritizedDispatcher::Job,
   scoped_ptr<DnsTask> dns_task_;
 
   // All Requests waiting for the result of this Job. Some can be canceled.
-  RequestsList requests_;
+  std::vector<scoped_ptr<Request>> requests_;
 
   // A handle used in |HostResolverImpl::dispatcher_|.
   PrioritizedDispatcher::Handle handle_;

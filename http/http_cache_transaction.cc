@@ -20,7 +20,6 @@
 #include "base/location.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/sparse_histogram.h"
-#include "base/profiler/scoped_tracker.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"  // For HexEncode.
 #include "base/strings/string_piece.h"
@@ -406,6 +405,7 @@ int HttpCache::Transaction::RestartIgnoringLastError(
 
 int HttpCache::Transaction::RestartWithCertificate(
     X509Certificate* client_cert,
+    SSLPrivateKey* client_private_key,
     const CompletionCallback& callback) {
   DCHECK(!callback.is_null());
 
@@ -415,7 +415,8 @@ int HttpCache::Transaction::RestartWithCertificate(
   if (!cache_.get())
     return ERR_UNEXPECTED;
 
-  int rv = RestartNetworkRequestWithCertificate(client_cert);
+  int rv =
+      RestartNetworkRequestWithCertificate(client_cert, client_private_key);
 
   if (rv == ERR_IO_PENDING)
     callback_ = callback;
@@ -1300,11 +1301,6 @@ int HttpCache::Transaction::DoCacheToggleUnusedSincePrefetch() {
   // transaction then metadata will be written to cache twice. If prefetching
   // becomes more common, consider combining the writes.
 
-  // TODO(rtenneti): Remove ScopedTracker below once crbug.com/422516 is fixed.
-  tracked_objects::ScopedTracker tracking_profile(
-      FROM_HERE_WITH_EXPLICIT_FUNCTION(
-          "422516 HttpCache::Transaction::DoCacheToggleUnusedSincePrefetch"));
-
   next_state_ = STATE_TOGGLE_UNUSED_SINCE_PREFETCH_COMPLETE;
   return WriteResponseInfoToEntry(false);
 }
@@ -1604,11 +1600,6 @@ int HttpCache::Transaction::DoUpdateCachedResponse() {
 }
 
 int HttpCache::Transaction::DoCacheWriteUpdatedResponse() {
-  // TODO(rtenneti): Remove ScopedTracker below once crbug.com/422516 is fixed.
-  tracked_objects::ScopedTracker tracking_profile(
-      FROM_HERE_WITH_EXPLICIT_FUNCTION(
-          "422516 HttpCache::Transaction::DoCacheWriteUpdatedResponse"));
-
   next_state_ = STATE_CACHE_WRITE_UPDATED_RESPONSE_COMPLETE;
   return WriteResponseInfoToEntry(false);
 }
@@ -1686,11 +1677,6 @@ int HttpCache::Transaction::DoOverwriteCachedResponse() {
 }
 
 int HttpCache::Transaction::DoCacheWriteResponse() {
-  // TODO(rtenneti): Remove ScopedTracker below once crbug.com/422516 is fixed.
-  tracked_objects::ScopedTracker tracking_profile(
-      FROM_HERE_WITH_EXPLICIT_FUNCTION(
-          "422516 HttpCache::Transaction::DoCacheWriteResponse"));
-
   next_state_ = STATE_CACHE_WRITE_RESPONSE_COMPLETE;
   return WriteResponseInfoToEntry(truncated_);
 }
@@ -2296,13 +2282,15 @@ int HttpCache::Transaction::RestartNetworkRequest() {
 }
 
 int HttpCache::Transaction::RestartNetworkRequestWithCertificate(
-    X509Certificate* client_cert) {
+    X509Certificate* client_cert,
+    SSLPrivateKey* client_private_key) {
   DCHECK(mode_ & WRITE || mode_ == NONE);
   DCHECK(network_trans_.get());
   DCHECK_EQ(STATE_NONE, next_state_);
 
   next_state_ = STATE_SEND_REQUEST_COMPLETE;
-  int rv = network_trans_->RestartWithCertificate(client_cert, io_callback_);
+  int rv = network_trans_->RestartWithCertificate(
+      client_cert, client_private_key, io_callback_);
   if (rv != ERR_IO_PENDING)
     return DoLoop(rv);
   return rv;

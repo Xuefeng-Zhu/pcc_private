@@ -207,7 +207,7 @@ void TestTransactionConsumer::DidFinish(int result) {
   state_ = DONE;
   error_ = result;
   if (--quit_counter_ == 0)
-    base::MessageLoop::current()->Quit();
+    base::MessageLoop::current()->QuitWhenIdle();
 }
 
 void TestTransactionConsumer::Read() {
@@ -265,6 +265,7 @@ int MockNetworkTransaction::RestartIgnoringLastError(
 
 int MockNetworkTransaction::RestartWithCertificate(
     X509Certificate* client_cert,
+    SSLPrivateKey* client_private_key,
     const CompletionCallback& callback) {
   return ERR_FAILED;
 }

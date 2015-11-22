@@ -60,6 +60,7 @@
 #include "net/spdy/spdy_session_pool.h"
 #include "net/ssl/ssl_cert_request_info.h"
 #include "net/ssl/ssl_connection_status_flags.h"
+#include "net/ssl/ssl_private_key.h"
 #include "url/gurl.h"
 #include "url/url_canon.h"
 
@@ -154,7 +155,8 @@ HttpNetworkTransaction::HttpNetworkTransaction(RequestPriority priority,
       establishing_tunnel_(false),
       websocket_handshake_stream_base_create_helper_(NULL) {
   session->ssl_config_service()->GetSSLConfig(&server_ssl_config_);
-  session->GetNextProtos(&server_ssl_config_.next_protos);
+  session->GetAlpnProtos(&server_ssl_config_.alpn_protos);
+  session->GetNpnProtos(&server_ssl_config_.npn_protos);
   proxy_ssl_config_ = server_ssl_config_;
 }
 
@@ -219,7 +221,9 @@ int HttpNetworkTransaction::RestartIgnoringLastError(
 }
 
 int HttpNetworkTransaction::RestartWithCertificate(
-    X509Certificate* client_cert, const CompletionCallback& callback) {
+    X509Certificate* client_cert,
+    SSLPrivateKey* client_private_key,
+    const CompletionCallback& callback) {
   // In HandleCertificateRequest(), we always tear down existing stream
   // requests to force a new connection.  So we shouldn't have one here.
   DCHECK(!stream_request_.get());
@@ -230,8 +234,10 @@ int HttpNetworkTransaction::RestartWithCertificate(
       &proxy_ssl_config_ : &server_ssl_config_;
   ssl_config->send_client_cert = true;
   ssl_config->client_cert = client_cert;
+  ssl_config->client_private_key = client_private_key;
   session_->ssl_client_auth_cache()->Add(
-      response_.cert_request_info->host_and_port, client_cert);
+      response_.cert_request_info->host_and_port, client_cert,
+      client_private_key);
   // Reset the other member variables.
   // Note: this is necessary only with SSL renegotiation.
   ResetStateForRestart();
@@ -1078,7 +1084,7 @@ int HttpNetworkTransaction::DoReadHeadersComplete(int result) {
       NetLog::TYPE_HTTP_TRANSACTION_READ_RESPONSE_HEADERS,
       base::Bind(&HttpResponseHeaders::NetLogCallback, response_.headers));
 
-  if (response_.headers->GetParsedHttpVersion() < HttpVersion(1, 0)) {
+  if (response_.headers->GetHttpVersion() < HttpVersion(1, 0)) {
     // HTTP/0.9 doesn't support the PUT method, so lack of response headers
     // indicates a buggy server.  See:
     // https://bugzilla.mozilla.org/show_bug.cgi?id=193921
@@ -1225,8 +1231,10 @@ int HttpNetworkTransaction::HandleCertificateRequest(int error) {
   // to provide one for this server before, use the past decision
   // automatically.
   scoped_refptr<X509Certificate> client_cert;
+  scoped_refptr<SSLPrivateKey> client_private_key;
   bool found_cached_cert = session_->ssl_client_auth_cache()->Lookup(
-      response_.cert_request_info->host_and_port, &client_cert);
+      response_.cert_request_info->host_and_port, &client_cert,
+      &client_private_key);
   if (!found_cached_cert)
     return error;
 
@@ -1250,6 +1258,7 @@ int HttpNetworkTransaction::HandleCertificateRequest(int error) {
       &proxy_ssl_config_ : &server_ssl_config_;
   ssl_config->send_client_cert = true;
   ssl_config->client_cert = client_cert;
+  ssl_config->client_private_key = client_private_key;
   next_state_ = STATE_CREATE_STREAM;
   // Reset the other member variables.
   // Note: this is necessary only with SSL renegotiation.
@@ -1290,13 +1299,13 @@ int HttpNetworkTransaction::HandleSSLHandshakeError(int error) {
   // reflect servers require a deprecated cipher rather than merely prefer
   // it. This, however, has no security benefit until the ciphers are actually
   // removed.
-  if (!server_ssl_config_.enable_deprecated_cipher_suites &&
+  if (!server_ssl_config_.deprecated_cipher_suites_enabled &&
       (error == ERR_SSL_VERSION_OR_CIPHER_MISMATCH ||
        error == ERR_CONNECTION_CLOSED || error == ERR_CONNECTION_RESET)) {
     net_log_.AddEvent(
         NetLog::TYPE_SSL_CIPHER_FALLBACK,
         base::Bind(&NetLogSSLCipherFallbackCallback, &request_->url, error));
-    server_ssl_config_.enable_deprecated_cipher_suites = true;
+    server_ssl_config_.deprecated_cipher_suites_enabled = true;
     ResetConnectionAndRequestForResend();
     return OK;
   }
@@ -1513,7 +1522,7 @@ void HttpNetworkTransaction::RecordSSLFallbackMetrics(int result) {
   }
 
   UMA_HISTOGRAM_BOOLEAN("Net.ConnectionUsedSSLDeprecatedCipherFallback2",
-                        server_ssl_config_.enable_deprecated_cipher_suites);
+                        server_ssl_config_.deprecated_cipher_suites_enabled);
 
   if (server_ssl_config_.version_fallback) {
     // Record the error code which triggered the fallback and the state the

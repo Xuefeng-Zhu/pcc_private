@@ -116,6 +116,21 @@ int PartialCookieOrdering(const CanonicalCookie& a, const CanonicalCookie& b) {
   return a.Path().compare(b.Path());
 }
 
+// Returns true if the cookie does not violate any constraints imposed
+// by the cookie name's prefix, as described in
+// https://tools.ietf.org/html/draft-west-cookie-prefixes
+bool IsCookiePrefixValid(const GURL& url, const ParsedCookie& parsed_cookie) {
+  const char kSecurePrefix[] = "$Secure-";
+  const char kHostPrefix[] = "$Host-";
+  if (parsed_cookie.Name().find(kSecurePrefix) == 0)
+    return parsed_cookie.IsSecure() && url.SchemeIsCryptographic();
+  if (parsed_cookie.Name().find(kHostPrefix) == 0) {
+    return parsed_cookie.IsSecure() && url.SchemeIsCryptographic() &&
+           !parsed_cookie.HasDomain() && parsed_cookie.Path() == "/";
+  }
+  return true;
+}
+
 }  // namespace
 
 CanonicalCookie::CanonicalCookie()
@@ -235,6 +250,7 @@ CanonicalCookie* CanonicalCookie::Create(const GURL& url,
 
   std::string cookie_domain;
   if (!GetCookieDomain(url, parsed_cookie, &cookie_domain)) {
+    VLOG(kVlogSetCookies) << "Create() failed to get a cookie domain";
     return NULL;
   }
 
@@ -246,6 +262,12 @@ CanonicalCookie* CanonicalCookie::Create(const GURL& url,
   Time cookie_expires = CanonicalCookie::CanonExpiration(parsed_cookie,
                                                          creation_time,
                                                          server_time);
+
+  if (options.enforce_prefixes() && !IsCookiePrefixValid(url, parsed_cookie)) {
+    VLOG(kVlogSetCookies)
+        << "Create() failed because the cookie violated prefix rules.";
+    return nullptr;
+  }
 
   return new CanonicalCookie(
       url, parsed_cookie.Name(), parsed_cookie.Value(), cookie_domain,
@@ -391,11 +413,12 @@ bool CanonicalCookie::IncludeForRequestURL(const GURL& url,
   if (!IsOnPath(url.path()))
     return false;
 
-  // Include first-party-only cookies iff |options| tells us to include all of
-  // them, or if a first-party URL is set and its origin matches the origin of
-  // |url|.
+  // Include first-party-only cookies if:
+  //
+  // * |options| tells us to include all of them
+  // * a first-party origin is set, and they matches the origin of |url|
   if (IsFirstPartyOnly() && !options.include_first_party_only() &&
-      options.first_party_url().GetOrigin() != url.GetOrigin()) {
+      !options.first_party().IsSameOriginWith(url::Origin(url))) {
     return false;
   }
 
