@@ -155,7 +155,7 @@ class NET_EXPORT_PRIVATE PCCSender : public SendAlgorithmInterface {
   // End implementation of SendAlgorithmInterface.
 
  private:
- 	const QuicTime::Delta alarm_granularity_ = QuicTime::Delta::FromMilliseconds(1);
+ 	const QuicTime::Delta alarm_granularity_ = QuicTime::Delta::FromMicroseconds(1);
   
   // PCC monitor variable
   MonitorNumber current_monitor_;
