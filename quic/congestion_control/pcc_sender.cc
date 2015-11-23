@@ -70,7 +70,7 @@ bool PCCSender::OnPacketSent(
   packet_info.bytes = bytes;
   monitors_[current_monitor_].packet_vector.push_back(packet_info);
   QuicTime::Delta delay = QuicTime::Delta::FromMicroseconds(
-    bytes * base::Time::kMicrosecondsPerSecond / pcc_utility_.GetCurrentRate() / 1024 / 1024);
+    bytes * 8  * base::Time::kMicrosecondsPerSecond / pcc_utility_.GetCurrentRate() / 1024 / 1024);
   ideal_next_packet_send_time_ = sent_time.Add(delay);
   QuicTime::Delta time = sent_time.Subtract(QuicTime::Zero());
   printf("sent time: %ld\n", time.ToMicroseconds());
