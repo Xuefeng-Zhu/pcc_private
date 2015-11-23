@@ -70,8 +70,12 @@ bool PCCSender::OnPacketSent(
   packet_info.bytes = bytes;
   monitors_[current_monitor_].packet_vector.push_back(packet_info);
   QuicTime::Delta delay = QuicTime::Delta::FromMicroseconds(
-    bytes * 8  * base::Time::kMicrosecondsPerSecond / pcc_utility_.GetCurrentRate() / 1024 / 1024);
-  ideal_next_packet_send_time_ = sent_time.Add(delay);
+    bytes * 8 * base::Time::kMicrosecondsPerSecond / pcc_utility_.GetCurrentRate() / 1024 / 1024);
+  if (!ideal_next_packet_send_time_.IsInitialized()) {
+    ideal_next_packet_send_time_ = sent_time.Add(delay);
+  } else {
+    ideal_next_packet_send_time_ = ideal_next_packet_send_time_.Add(delay);
+  }
   QuicTime::Delta time = sent_time.Subtract(QuicTime::Zero());
   printf("sent time: %ld\n", time.ToMicroseconds());
   printf("sent at rate %f\n", pcc_utility_.GetCurrentRate());
@@ -180,6 +184,9 @@ QuicTime::Delta PCCSender::TimeUntilSend(
   if (ideal_next_packet_send_time_ > now.Add(alarm_granularity_)) {
     DVLOG(1) << "Delaying packet: "
              << ideal_next_packet_send_time_.Subtract(now).ToMicroseconds();
+    //printf("ideal time: %ld\n", ideal_next_packet_send_time_.Subtract(QuicTime::Zero()).ToMicroseconds());
+    //printf("now time: %ld\n", now.Subtract(QuicTime::Zero()).ToMicroseconds());
+    //printf("delay time: %ld\n", ideal_next_packet_send_time_.Subtract(now).ToMicroseconds());
     return ideal_next_packet_send_time_.Subtract(now);
   }
 
