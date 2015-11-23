@@ -56,6 +56,7 @@ bool PCCSender::OnPacketSent(
   if (current_monitor_end_time_.Subtract(QuicTime::Zero()).IsZero()) {
     StartMonitor(sent_time);
     monitors_[current_monitor_].start_seq_num = packet_number;
+    ideal_next_packet_send_time_ = sent_time;
   } else {
     QuicTime::Delta diff = sent_time.Subtract(current_monitor_end_time_);
     if (diff.ToMicroseconds() > 0) {
@@ -71,11 +72,7 @@ bool PCCSender::OnPacketSent(
   monitors_[current_monitor_].packet_vector.push_back(packet_info);
   QuicTime::Delta delay = QuicTime::Delta::FromMicroseconds(
     bytes * 8 * base::Time::kMicrosecondsPerSecond / pcc_utility_.GetCurrentRate() / 1024 / 1024);
-  if (!ideal_next_packet_send_time_.IsInitialized()) {
-    ideal_next_packet_send_time_ = sent_time.Add(delay);
-  } else {
-    ideal_next_packet_send_time_ = ideal_next_packet_send_time_.Add(delay);
-  }
+  ideal_next_packet_send_time_ = ideal_next_packet_send_time_.Add(delay);
   QuicTime::Delta time = sent_time.Subtract(QuicTime::Zero());
   printf("sent time: %ld\n", time.ToMicroseconds());
   printf("sent at rate %f\n", pcc_utility_.GetCurrentRate());
@@ -102,6 +99,7 @@ void PCCSender::StartMonitor(QuicTime sent_time){
   monitors_[current_monitor_].start_time = sent_time;
   monitors_[current_monitor_].end_time = QuicTime::Zero();
   monitors_[current_monitor_].end_transmission_time = QuicTime::Zero();
+  monitors_[current_monitor_].packet_vector.clear();
   printf("StartMonitor monitor_num %u\n", current_monitor_);
 
 }
