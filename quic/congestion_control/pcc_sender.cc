@@ -96,6 +96,7 @@ void PCCSender::StartMonitor(QuicTime sent_time){
   current_monitor_end_time_ = sent_time.Add(monitor_interval);
 
   monitors_[current_monitor_].state = SENDING;
+  monitors_[current_monitor_].srtt = srtt;
   monitors_[current_monitor_].start_time = sent_time;
   monitors_[current_monitor_].end_time = QuicTime::Zero();
   monitors_[current_monitor_].end_transmission_time = QuicTime::Zero();
@@ -145,8 +146,7 @@ void PCCSender::EndMonitor(MonitorNumber monitor_num) {
   printf("EndMonitor monitor_num %u\n", monitor_num);
   if (monitors_[monitor_num].state == WAITING){
     monitors_[monitor_num].state = FINISHED;
-    pcc_utility_.OnMonitorEnd(monitors_[monitor_num],
-                              rtt_stats_, current_monitor_,
+    pcc_utility_.OnMonitorEnd(monitors_[monitor_num], current_monitor_,
                               monitor_num);
     printf("EndMonitor\n");
   }
@@ -292,7 +292,6 @@ void PCCUtility::OnMonitorStart(MonitorNumber current_monitor) {
 }
 
 void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
-                              const RttStats* rtt_stats,
                               MonitorNumber current_monitor,
                               MonitorNumber end_monitor) {
 
@@ -303,11 +302,11 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
   int64 time =
       pcc_monitor.end_transmission_time.Subtract(pcc_monitor.start_time).ToMicroseconds();
 
-  int64 srtt = rtt_stats->latest_rtt().ToMicroseconds();
+  int64 srtt = pcc_monitor.srtt;
   if (previous_rtt_ == 0) previous_rtt_ = srtt;
 
   double current_utility = ((total-loss)/time*(1-1/(1+exp(-1000*(loss/total-0.05))))
-      * (1-1/(1+exp(-80*(1-previous_rtt_/srtt)))) - 1*loss/time) / 1*1000;
+      * (1-1/(1+exp(-10*(1-previous_rtt_/double(srtt))))) - 1*loss/time) / 1*1000;
 
   printf("loss %f\n", loss);
   printf("total %f\n", total);
@@ -328,6 +327,8 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
       }
       return;
     }
+    printf("previous utility %f\n", previous_utility_);
+    printf("current utility %f\n", current_utility);
 
     if (previous_utility_ < current_utility) {
       previous_utility_ = current_utility;
