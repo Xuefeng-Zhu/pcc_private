@@ -421,7 +421,6 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
 
       double change_amount =
           change_intense_ * GRANULARITY * current_rate_ * change_direction_;
-      previous_utility_ = current_utility;
 
       if (if_initial_moving_phase_ || current_utility > previous_utility_){
         current_rate_ += change_amount;
@@ -431,6 +430,8 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
         if_moving_phase_ = false;
         if_make_guess_ = true;
       }
+      previous_utility_ = current_utility;
+
     }
 
 }
