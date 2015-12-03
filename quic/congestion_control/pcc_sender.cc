@@ -21,8 +21,10 @@ PCCSender::PCCSender(const RttStats* rtt_stats)
   : current_monitor_(-1),
     current_monitor_end_time_(QuicTime::Zero()),
     rtt_stats_(rtt_stats),
-    ideal_next_packet_send_time_(QuicTime::Zero()){
-  printf("pcc\n");
+    ideal_next_packet_send_time_(QuicTime::Zero()),
+    previous_timer_(QuicTime::Zero()),
+    send_bytes_(0),
+    ack_bytes_(0){
 }
 
 
@@ -52,6 +54,22 @@ bool PCCSender::OnPacketSent(
     QuicByteCount bytes,
     HasRetransmittableData has_retransmittable_data) {
 
+  if (previous_timer_.Subtract(QuicTime::Zero()).IsZero()) {
+    previous_timer_ = sent_time;
+  }
+
+  if (sent_time.Subtract(previous_timer_).ToSeconds()) {
+    printf("rtt %ldus\n", rtt_stats_->smoothed_rtt().ToMicroseconds());
+    printf("sent at rate %f mbps\n", (double)send_bytes_*8 / 1024 / 1024);
+    printf("throughput rate %f mbps\n\n", (double)ack_bytes_*8 / 1024 / 1024);
+
+    previous_timer_ = sent_time;
+    send_bytes_ = 0;
+    ack_bytes_ = 0;
+  } else {
+    send_bytes_ += bytes;
+  }
+
   // TODO : case for retransmission
   if (current_monitor_end_time_.Subtract(QuicTime::Zero()).IsZero()) {
     StartMonitor(sent_time);
@@ -73,10 +91,6 @@ bool PCCSender::OnPacketSent(
   QuicTime::Delta delay = QuicTime::Delta::FromMicroseconds(
     bytes * 8 * base::Time::kMicrosecondsPerSecond / pcc_utility_.GetCurrentRate() / 1024 / 1024);
   ideal_next_packet_send_time_ = ideal_next_packet_send_time_.Add(delay);
-  QuicTime::Delta time = sent_time.Subtract(QuicTime::Zero());
-  printf("sent time: %ld\n", time.ToMicroseconds());
-  printf("sent at rate %f\n", pcc_utility_.GetCurrentRate());
-  printf("sent sequence_number%lu\n\n", packet_number);
   return true;
 }
 
@@ -92,7 +106,6 @@ void PCCSender::StartMonitor(QuicTime sent_time){
   }
   QuicTime::Delta monitor_interval =
       QuicTime::Delta::FromMicroseconds(srtt * (1.5 + rand_factor));
-  printf("rtt %ld\n\n", srtt);
   current_monitor_end_time_ = sent_time.Add(monitor_interval);
 
   monitors_[current_monitor_].state = SENDING;
@@ -101,7 +114,6 @@ void PCCSender::StartMonitor(QuicTime sent_time){
   monitors_[current_monitor_].end_time = QuicTime::Zero();
   monitors_[current_monitor_].end_transmission_time = QuicTime::Zero();
   monitors_[current_monitor_].packet_vector.clear();
-  printf("StartMonitor monitor_num %u\n", current_monitor_);
 
 }
 
@@ -122,8 +134,6 @@ void PCCSender::OnCongestionEvent(
     if (it->first == monitors_[monitor_num].end_seq_num) {
       EndMonitor(monitor_num);
     }
-
-    printf("lost sequence_number%lu\n\n", it->first);
   }
 
   for (CongestionVector::const_iterator it = acked_packets.cbegin();
@@ -135,6 +145,7 @@ void PCCSender::OnCongestionEvent(
     }
     int pos = it->first - monitors_[monitor_num].start_seq_num;
     monitors_[monitor_num].packet_vector[pos].state = ACK;
+    ack_bytes_ += monitors_[monitor_num].packet_vector[pos].bytes;
 
     if (it->first == monitors_[monitor_num].end_seq_num) {
       EndMonitor(monitor_num);
@@ -143,17 +154,14 @@ void PCCSender::OnCongestionEvent(
 }
 
 void PCCSender::EndMonitor(MonitorNumber monitor_num) {
-  printf("EndMonitor monitor_num %u\n", monitor_num);
   if (monitors_[monitor_num].state == WAITING){
     monitors_[monitor_num].state = FINISHED;
     pcc_utility_.OnMonitorEnd(monitors_[monitor_num], current_monitor_,
                               monitor_num);
-    printf("EndMonitor\n");
   }
 }
 
 MonitorNumber PCCSender::GetMonitor(QuicPacketNumber sequence_number) {
-  printf("ack sequence_number%lu\n\n", sequence_number);
   MonitorNumber result = current_monitor_;
 
   do {
@@ -165,7 +173,6 @@ MonitorNumber PCCSender::GetMonitor(QuicPacketNumber sequence_number) {
     result = (result + 99) % NUM_MONITOR;
   } while (result != current_monitor_);
 
-  printf("%lu\n", sequence_number);
   printf("Monitor is not found\n");
   return -1;
 }
@@ -182,9 +189,6 @@ QuicTime::Delta PCCSender::TimeUntilSend(
   if (ideal_next_packet_send_time_ > now.Add(alarm_granularity_)) {
     DVLOG(1) << "Delaying packet: "
              << ideal_next_packet_send_time_.Subtract(now).ToMicroseconds();
-    //printf("ideal time: %ld\n", ideal_next_packet_send_time_.Subtract(QuicTime::Zero()).ToMicroseconds());
-    //printf("now time: %ld\n", now.Subtract(QuicTime::Zero()).ToMicroseconds());
-    //printf("delay time: %ld\n", ideal_next_packet_send_time_.Subtract(now).ToMicroseconds());
     return ideal_next_packet_send_time_.Subtract(now);
   }
 
@@ -243,7 +247,6 @@ PCCUtility::PCCUtility()
     for (int i = 0; i < NUM_MONITOR; i++) {
       start_rate_array[i] = 0;
     }
-    printf("pcc_utility\n");
   }
 
 void PCCUtility::OnMonitorStart(MonitorNumber current_monitor) {
@@ -271,11 +274,9 @@ void PCCUtility::OnMonitorStart(MonitorNumber current_monitor) {
             + rand_dir * continous_guess_count_ * GRANULARITY * current_rate_;
         guess_stat_bucket[i + 1].rate = current_rate_
             - rand_dir * continous_guess_count_ * GRANULARITY * current_rate_;
-        printf("guess at rate %f\n", guess_stat_bucket[i].rate);
 
       }
 
-    printf("guess monitor_num %u\n", current_monitor);
       for (int i = 0; i < NUMBER_OF_PROBE; i++) {
         guess_stat_bucket[i].monitor = (current_monitor + i) % NUM_MONITOR;
       }
@@ -308,10 +309,6 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
   double current_utility = ((total-loss)/time*(1-1/(1+exp(-1000*(loss/total-0.05))))
       * (1-1/(1+exp(-10*(1-previous_rtt_/double(srtt))))) - 1*loss/time) / 1*1000;
 
-  printf("loss %f\n", loss);
-  printf("total %f\n", total);
-
-
   previous_rtt_ = srtt;
 
   if (end_monitor == 0 && if_starting_phase_) current_utility /= 2;
@@ -327,8 +324,6 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
       }
       return;
     }
-    printf("previous utility %f\n", previous_utility_);
-    printf("current utility %f\n", current_utility);
 
     if (previous_utility_ < current_utility) {
       previous_utility_ = current_utility;
@@ -351,7 +346,6 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
       }
     }
 
-    printf("num_recorded_%d\n", num_recorded_);
     if (num_recorded_ == NUMBER_OF_PROBE) {
       num_recorded_ = 0;
       int decision = 0;
@@ -361,10 +355,6 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
             && guess_stat_bucket[i].rate > guess_stat_bucket[i+1].rate;
         bool case2 = guess_stat_bucket[i].utility < guess_stat_bucket[i+1].utility
             && guess_stat_bucket[i].rate < guess_stat_bucket[i+1].rate;
-      printf("rate1 %f\n", guess_stat_bucket[i].rate);
-      printf("utility1 %f\n", guess_stat_bucket[i].utility);
-      printf("rate2 %f\n", guess_stat_bucket[i+1].rate);
-      printf("utility2 %f\n", guess_stat_bucket[i+1].utility);
 
         if (case1 || case2) {
           decision += 1;
@@ -378,7 +368,6 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
         if_make_guess_ = true;
       } else {
         change_direction_ = decision > 0 ? 1 : -1;
-        printf("change direction %d\n", change_direction_);
         change_intense_ = 1;
         double change_amount = (continous_guess_count_/2+1)
             * change_intense_ * change_direction_ * GRANULARITY * current_rate_;
@@ -387,7 +376,6 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
         previous_utility_ = 0;
         continous_guess_count_ = 0;
         tartger_monitor_ = (current_monitor + 1) % NUM_MONITOR;
-        printf("tartget monitor_num %u\n", tartger_monitor_);
         if_initial_moving_phase_ = true;
       }
       return;
@@ -395,12 +383,8 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
   }
 
     // moving phase
-    printf("tartget monitor_num %u\n", tartger_monitor_);
-    printf("end monitor_num %u\n", end_monitor);
     if (end_monitor == tartger_monitor_) {
       double tmp_rate = total * 8 / time;
-      printf("current rate %f\n", current_rate_);
-      printf("tmp rate %f\n", tmp_rate);
       if (current_rate_ - tmp_rate > 10 && current_rate_ > 200) {
         current_rate_ = tmp_rate;
 
@@ -431,7 +415,6 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
         if_make_guess_ = true;
       }
       previous_utility_ = current_utility;
-
     }
 
 }
