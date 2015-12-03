@@ -175,6 +175,10 @@ class NET_EXPORT_PRIVATE PCCSender : public SendAlgorithmInterface {
   // Get the monitor corresponding to the sequence number
   MonitorNumber GetMonitor(QuicPacketNumber sequence_number);
 
+  // logging utility
+  QuicTime previous_timer_;
+  QuicByteCount send_bytes_;
+  QuicByteCount ack_bytes_;
   DISALLOW_COPY_AND_ASSIGN(PCCSender);
 };
 
