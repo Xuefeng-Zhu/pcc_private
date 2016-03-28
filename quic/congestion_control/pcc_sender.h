@@ -42,8 +42,9 @@ struct PacketInfo {
 
 struct PCCMonitor {
   MonitorState state;
+  int64 srtt;
 
-  // time statics  
+  // time statics
   QuicTime start_time;
   QuicTime end_time;
   QuicTime end_transmission_time;
@@ -66,7 +67,7 @@ struct GuessStat {
 const int NUM_MONITOR = 100;
 const int NUMBER_OF_PROBE = 4;
 const int MAX_COUNTINOUS_GUESS = 5;
-const double GRANULARITY = 0.01;
+const double GRANULARITY = 0.05;
 
 class PCCUtility {
  public:
@@ -76,7 +77,6 @@ class PCCUtility {
 
   // Callback function when monitor ends
   void OnMonitorEnd(PCCMonitor pcc_monitor,
-                    const RttStats* rtt_stats,
                     MonitorNumber current_monitor,
                     MonitorNumber end_monitor);
 
@@ -139,6 +139,7 @@ class NET_EXPORT_PRIVATE PCCSender : public SendAlgorithmInterface {
                     QuicByteCount bytes,
                     HasRetransmittableData is_retransmittable) override;
   void OnRetransmissionTimeout(bool packets_retransmitted) override;
+  void OnConnectionMigration() override {}
   QuicTime::Delta TimeUntilSend(
       QuicTime now,
       QuicByteCount bytes_in_flight,
@@ -154,7 +155,7 @@ class NET_EXPORT_PRIVATE PCCSender : public SendAlgorithmInterface {
   // End implementation of SendAlgorithmInterface.
 
  private:
- 	const QuicTime::Delta alarm_granularity_ = QuicTime::Delta::FromMilliseconds(1);
+  const QuicTime::Delta alarm_granularity_ = QuicTime::Delta::FromMicroseconds(1);
   
   // PCC monitor variable
   MonitorNumber current_monitor_;
@@ -174,6 +175,10 @@ class NET_EXPORT_PRIVATE PCCSender : public SendAlgorithmInterface {
   // Get the monitor corresponding to the sequence number
   MonitorNumber GetMonitor(QuicPacketNumber sequence_number);
 
+  // logging utility
+  QuicTime previous_timer_;
+  QuicByteCount send_bytes_;
+  QuicByteCount ack_bytes_;
   DISALLOW_COPY_AND_ASSIGN(PCCSender);
 };
 

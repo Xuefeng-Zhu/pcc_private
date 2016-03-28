@@ -5,6 +5,7 @@
 #include "net/quic/quic_sent_packet_manager.h"
 
 #include <algorithm>
+#include <stdio.h>
 
 #include "base/logging.h"
 #include "base/stl_util.h"
@@ -142,7 +143,19 @@ void QuicSentPacketManager::SetFromConfig(const QuicConfig& config) {
         clock_, &rtt_stats_, kCubicBytes, stats_, initial_congestion_window_));
   }
   if (!FLAGS_quic_disable_pacing) {
-    EnablePacing();
+    //EnablePacing();
+  }
+  if (config.HasReceivedConnectionOptions() &&
+      ContainsQuicTag(config.ReceivedConnectionOptions(), kPCC)) {
+    printf("kpcc receive\n");
+    send_algorithm_.reset(SendAlgorithmInterface::Create(
+        clock_, &rtt_stats_, kPcc, stats_, initial_congestion_window_));
+  }
+  
+  if (config.HasClientSentConnectionOption(kPCC, perspective_)) {
+    printf("kpcc send\n");
+    send_algorithm_.reset(SendAlgorithmInterface::Create(
+        clock_, &rtt_stats_, kPcc, stats_, initial_congestion_window_));
   }
 
   if (config.HasClientSentConnectionOption(k1CON, perspective_)) {
