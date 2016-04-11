@@ -27,6 +27,13 @@ enum PacketState {
   LOST
 };
 
+enum UtilityState {
+  STARTING,
+  GUESSING,
+  RECORDING,
+  MOVING
+};
+
 struct PacketInfo {
   QuicTime sent_time;
   QuicByteCount bytes;
@@ -84,17 +91,16 @@ class PCCUtility {
   double GetCurrentRate();
 
  private:
+  UtilityState state_;
+
   double current_rate_;
   double previous_utility_;
   double previous_rtt_;
 
-  bool if_starting_phase_;
   double start_rate_array[NUM_MONITOR];
   MonitorNumber previous_monitor_;
 
   // variables used for guess phase 
-  bool if_make_guess_;
-  bool if_recording_guess_;
   int num_recorded_;
   int guess_time_;
   int continous_guess_count_;
@@ -103,8 +109,6 @@ class PCCUtility {
 
   // variables used for moving phase
   MonitorNumber tartger_monitor_;
-  bool if_moving_phase_;
-  bool if_initial_moving_phase_;
 
   int change_direction_;
   int change_intense_;

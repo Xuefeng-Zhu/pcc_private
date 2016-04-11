@@ -229,19 +229,15 @@ CongestionControlType PCCSender::GetCongestionControlType() const {
 }
 
 PCCUtility::PCCUtility()
-  : current_rate_(10),
+  : state_(STARTING),
+    current_rate_(10),
     previous_utility_(-10000),
     previous_rtt_(0),
-    if_starting_phase_(true),
     previous_monitor_(-1),
-    if_make_guess_(false),
-    if_recording_guess_(false),
     num_recorded_(0),
     guess_time_(0),
     continous_guess_count_(0),
     tartger_monitor_(0),
-    if_moving_phase_(false),
-    if_initial_moving_phase_(false),
     change_direction_(0),
     change_intense_(1) {
     for (int i = 0; i < NUM_MONITOR; i++) {
@@ -250,21 +246,17 @@ PCCUtility::PCCUtility()
   }
 
 void PCCUtility::OnMonitorStart(MonitorNumber current_monitor) {
-  if (if_starting_phase_) {
-    current_rate_ *= 2;
-    start_rate_array[current_monitor] = current_rate_;
+  switch (state_) {
+    case STARTING:
+      current_rate_ *= 2;
+      start_rate_array[current_monitor] = current_rate_;
+      return;
+    case GUESSING:
+      if (continous_guess_count_ == MAX_COUNTINOUS_GUESS) {
+        continous_guess_count_ = 0;
+      }
 
-    return;
-  }
-
-  if (if_make_guess_) {
-    if (guess_time_ == 0 && continous_guess_count_ == MAX_COUNTINOUS_GUESS) {
-      continous_guess_count_ = 0;
-    }
-
-    if (guess_time_ == 0) {
-      if_recording_guess_ = true;
-
+      state_ = RECORDING;
       continous_guess_count_++;
 
       for (int i = 0; i < NUMBER_OF_PROBE; i += 2) {
@@ -274,21 +266,18 @@ void PCCUtility::OnMonitorStart(MonitorNumber current_monitor) {
             + rand_dir * continous_guess_count_ * GRANULARITY * current_rate_;
         guess_stat_bucket[i + 1].rate = current_rate_
             - rand_dir * continous_guess_count_ * GRANULARITY * current_rate_;
-
       }
 
       for (int i = 0; i < NUMBER_OF_PROBE; i++) {
         guess_stat_bucket[i].monitor = (current_monitor + i) % NUM_MONITOR;
       }
-    }
+    case RECORDING:
+      current_rate_ = guess_stat_bucket[guess_time_].rate;
+      guess_time_++;
 
-    current_rate_ = guess_stat_bucket[guess_time_].rate;
-    guess_time_++;
-
-    if (guess_time_ == NUMBER_OF_PROBE) {
-      if_make_guess_ = false;
-      guess_time_ = 0;
-    }
+      if (guess_time_ == NUMBER_OF_PROBE) {
+        guess_time_ = 0;
+      }
   }
 }
 
@@ -306,117 +295,98 @@ void PCCUtility::OnMonitorEnd(PCCMonitor pcc_monitor,
   int64 srtt = pcc_monitor.srtt;
   if (previous_rtt_ == 0) previous_rtt_ = srtt;
 
-  double current_utility = ((total-loss)/time*(1-1/(1+exp(-1000*(loss/total-0.05))))
-      * (1-1/(1+exp(-10*(1-previous_rtt_/double(srtt))))) - 1*loss/time) / 1*1000;
+  double current_utility = ((total - loss) / time *
+    (1 - 1 / ( 1 + exp(-1000 * (loss / total - 0.05)))) *
+    (1 - 1 / (1 + exp(-10 * (1 - previous_rtt_ / double(srtt))))) - 1 * loss / time) / 1 * 1000;
 
   previous_rtt_ = srtt;
 
-  if (end_monitor == 0 && if_starting_phase_) current_utility /= 2;
 
-  if (if_starting_phase_) {
-    if (end_monitor - previous_monitor_ > 1) {
-        if_starting_phase_ = false;
-        if_make_guess_ = true;
-      if (previous_monitor_ == -1) {
-        current_rate_ = start_rate_array[0];
+  switch (state_) {
+    case STARTING:
+      if (end_monitor == 0) current_utility /= 2;
+
+      if (end_monitor - previous_monitor_ > 1) {
+          state_ = GUESSING;
+          current_rate_ = previous_monitor_ == -1 ?
+            start_rate_array[0] : start_rate_array[previous_monitor_];
+        return;
+      }
+
+      if (previous_utility_ < current_utility) {
+        previous_utility_ = current_utility;
+        previous_monitor_ = end_monitor;
       } else {
+        state_ = GUESSING;
         current_rate_ = start_rate_array[previous_monitor_];
       }
       return;
-    }
-
-    if (previous_utility_ < current_utility) {
-      previous_utility_ = current_utility;
-      previous_monitor_ = end_monitor;
-      return;
-    } else {
-      if_starting_phase_ = false;
-      if_make_guess_ = true;
-      current_rate_ = start_rate_array[previous_monitor_];
-      return;
-    }
-  }
-
-  if (if_recording_guess_) {
-    // find corresponding monitor
-    for (int i = 0; i < NUMBER_OF_PROBE; i++) {
-      if (end_monitor == guess_stat_bucket[i].monitor) {
-        num_recorded_++;
-        guess_stat_bucket[i].utility = current_utility;
-      }
-    }
-
-    if (num_recorded_ == NUMBER_OF_PROBE) {
-      num_recorded_ = 0;
-      int decision = 0;
-
-      for (int i = 0; i < NUMBER_OF_PROBE; i += 2) {
-        bool case1 = guess_stat_bucket[i].utility > guess_stat_bucket[i+1].utility
-            && guess_stat_bucket[i].rate > guess_stat_bucket[i+1].rate;
-        bool case2 = guess_stat_bucket[i].utility < guess_stat_bucket[i+1].utility
-            && guess_stat_bucket[i].rate < guess_stat_bucket[i+1].rate;
-
-        if (case1 || case2) {
-          decision += 1;
-        } else {
-          decision -= 1;
+    case RECORDING:
+      // find corresponding monitor
+      for (int i = 0; i < NUMBER_OF_PROBE; i++) {
+        if (end_monitor == guess_stat_bucket[i].monitor) {
+          num_recorded_++;
+          guess_stat_bucket[i].utility = current_utility;
         }
       }
 
-      if_recording_guess_ = false;
-      if (decision == 0) {
-        if_make_guess_ = true;
-      } else {
-        change_direction_ = decision > 0 ? 1 : -1;
-        change_intense_ = 1;
-        double change_amount = (continous_guess_count_/2+1)
-            * change_intense_ * change_direction_ * GRANULARITY * current_rate_;
-        current_rate_ += change_amount;
+      if (num_recorded_ == NUMBER_OF_PROBE) {
+        num_recorded_ = 0;
+        int decision = 0;
 
-        previous_utility_ = 0;
-        continous_guess_count_ = 0;
-        tartger_monitor_ = (current_monitor + 1) % NUM_MONITOR;
-        if_initial_moving_phase_ = true;
+        for (int i = 0; i < NUMBER_OF_PROBE; i += 2) {
+          bool case1 = guess_stat_bucket[i].utility > guess_stat_bucket[i + 1].utility
+              && guess_stat_bucket[i].rate > guess_stat_bucket[i + 1].rate;
+          bool case2 = guess_stat_bucket[i].utility < guess_stat_bucket[i + 1].utility
+              && guess_stat_bucket[i].rate < guess_stat_bucket[i + 1].rate;
+
+          decision += case1 || case2 ? 1 : -1;
+        }
+
+        if (decision == 0) {
+          state_ = GUESSING;
+        } else {
+          state_ = MOVING;
+          change_direction_ = decision > 0 ? 1 : -1;
+          change_intense_ = 1;
+          double change_amount = (continous_guess_count_/ 2 + 1)
+              * change_intense_ * change_direction_ * GRANULARITY * current_rate_;
+          current_rate_ += change_amount;
+
+          previous_utility_ = 0;
+          continous_guess_count_ = 0;
+          tartger_monitor_ = (current_monitor + 1) % NUM_MONITOR;
+        }
       }
       return;
-    }
+    case MOVING:
+      if (end_monitor == tartger_monitor_) {
+        // FIX: better name for tmp_rate?
+        double tmp_rate = total * 8 / time;
+        if (current_rate_ - tmp_rate > 10 && current_rate_ > 200) {
+          state_ = GUESSING;
+          current_rate_ = tmp_rate;
+          return;
+        }
+
+        bool continue_moving = current_utility > previous_utility_ || change_intense_ == 1;
+        if (continue_moving){
+          change_intense_ += 1;
+          tartger_monitor_ = (current_monitor + 1) % NUM_MONITOR;
+        }
+
+        double change_amount =
+            change_intense_ * GRANULARITY * current_rate_ * change_direction_;
+
+        if (continue_moving){
+          current_rate_ += change_amount;
+        } else {
+          state_ = GUESSING;
+          current_rate_ -= change_amount;
+        }
+        previous_utility_ = current_utility;
+      }
   }
-
-    // moving phase
-    if (end_monitor == tartger_monitor_) {
-      double tmp_rate = total * 8 / time;
-      if (current_rate_ - tmp_rate > 10 && current_rate_ > 200) {
-        current_rate_ = tmp_rate;
-
-        if_make_guess_ = true;
-        if_moving_phase_ = false;
-        if_initial_moving_phase_ = false;
-
-        change_direction_ = 0;
-        change_intense_ = 1;
-
-        guess_time_ = 0;
-      }
-
-      if (if_initial_moving_phase_ || current_utility > previous_utility_){
-        change_intense_ += 1;
-        tartger_monitor_ = (current_monitor + 1) % NUM_MONITOR;
-      }
-
-      double change_amount =
-          change_intense_ * GRANULARITY * current_rate_ * change_direction_;
-
-      if (if_initial_moving_phase_ || current_utility > previous_utility_){
-        current_rate_ += change_amount;
-        if_initial_moving_phase_ = false;
-      } else {
-        current_rate_ -= change_amount;
-        if_moving_phase_ = false;
-        if_make_guess_ = true;
-      }
-      previous_utility_ = current_utility;
-    }
-
 }
 
 void PCCUtility::GetBytesSum(std::vector<PacketInfo> packet_vector,
